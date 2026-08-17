@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Zankode VPN</title>
+  <desc id="desc">Telegram VPN shop and 3X-UI automation bot with inventory, wallet, referrals, gifts and admin tools.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071225"/>
+      <stop offset="0.52" stop-color="#0b1e3f"/>
+      <stop offset="1" stop-color="#23134f"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#35d6ff"/>
+      <stop offset="1" stop-color="#8c5cff"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="360" rx="28" fill="url(#bg)"/>
+  <circle cx="1070" cy="70" r="120" fill="#6e4cff" opacity=".20" filter="url(#glow)"/>
+  <circle cx="105" cy="320" r="130" fill="#18c8ff" opacity=".13" filter="url(#glow)"/>
+  <g opacity=".16" stroke="#b9d8ff" stroke-width="1">
+    <path d="M0 90H1200M0 180H1200M0 270H1200"/>
+    <path d="M150 0V360M300 0V360M450 0V360M600 0V360M750 0V360M900 0V360M1050 0V360"/>
+  </g>
+  <g transform="translate(88 72)">
+    <rect x="0" y="0" width="144" height="144" rx="36" fill="url(#accent)"/>
+    <path d="M72 31l33 13v27c0 23-13 40-33 49-20-9-33-26-33-49V44l33-13z" fill="#08152c" opacity=".95"/>
+    <path d="M56 72l11 11 23-28" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="114" cy="30" r="16" fill="#fff"/>
+    <path d="M106 30h16M114 22v16" stroke="#6d52ff" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <text x="270" y="125" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="66" font-weight="800" letter-spacing="-1">Zankode VPN</text>
+  <text x="273" y="172" fill="#a9c5ed" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="25" font-weight="500">Telegram VPN Shop • 3X-UI • Inventory • Wallet • Referral • Admin</text>
+  <g transform="translate(273 215)" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700">
+    <rect x="0" y="0" width="147" height="42" rx="21" fill="#102f4f" stroke="#35d6ff" opacity=".95"/>
+    <text x="73.5" y="27" text-anchor="middle" fill="#bceeff">Python 3.10+</text>
+    <rect x="162" y="0" width="132" height="42" rx="21" fill="#102f4f" stroke="#35d6ff" opacity=".95"/>
+    <text x="228" y="27" text-anchor="middle" fill="#bceeff">SQLite</text>
+    <rect x="309" y="0" width="190" height="42" rx="21" fill="#211d4a" stroke="#8c5cff" opacity=".95"/>
+    <text x="404" y="27" text-anchor="middle" fill="#ddd3ff">Telegram Bot 22.8</text>
+    <rect x="514" y="0" width="151" height="42" rx="21" fill="#211d4a" stroke="#8c5cff" opacity=".95"/>
+    <text x="589.5" y="27" text-anchor="middle" fill="#ddd3ff">v2.2.0</text>
+  </g>
+  <text x="273" y="310" fill="#6f8fb8" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16">3X-UI Automation • Modular • Self-hosted • GitHub Actions CI</text>
+</svg>
