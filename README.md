@@ -1,161 +1,254 @@
 <p align="center">
-  <img src="assets/readme/banner.svg" alt="Zankode VPN" width="100%" />
+  <img src="assets/readme/banner.svg" alt="Zankode VPN" width="100%">
+</p>
+
+<h1 align="center">Zankode VPN</h1>
+
+<p align="center">
+  <strong>Telegram VPN Store & 3X-UI Manager</strong>
 </p>
 
 <p align="center">
-  <strong>Zankode VPN v2.2.0</strong><br/>
-  A modular Telegram bot for selling, delivering, and operating VPN configuration services.
+  A modular Telegram bot for selling, delivering and managing VPN services with direct 3X-UI / Xray integration.
 </p>
 
 <p align="center">
-  <a href="#fa">فارسی</a> ·
-  <a href="#en">English</a> ·
-  <a href="#project-structure">Project Structure</a> ·
-  <a href="#github-actions">GitHub Actions</a>
+  <a href="#-فارسی">🇮🇷 فارسی</a>
+  &nbsp;•&nbsp;
+  <a href="#-english">🇬🇧 English</a>
+  &nbsp;•&nbsp;
+  <a href="#-installation">⚙️ Installation</a>
+  &nbsp;•&nbsp;
+  <a href="#-project-structure">📁 Structure</a>
 </p>
 
 ---
 
-<a id="fa"></a>
-# 🇮🇷 معرفی فارسی
+# 🇮🇷 فارسی
 
-**Zankode VPN** یک ربات تلگرام ماژولار برای **فروش، مدیریت موجودی، پرداخت، تحویل و پشتیبانی سرویس‌های VPN** است. کاربر تمام مراحل خرید را داخل تلگرام انجام می‌دهد و ادمین نیز از پنل مدیریتی داخل خود ربات، سفارش‌ها، کاربران، موجودی، کیف پول، Referral، Gift Code، اکانت تست، گزارش‌ها و عملیات روزانه را مدیریت می‌کند.
+**Zankode VPN** یک ربات تلگرام ماژولار برای فروش و مدیریت سرویس‌های VPN است.
 
-> [!IMPORTANT]
-> از نسخه **v2.2.0**، Zankode VPN علاوه بر Inventory داخلی، به‌صورت مستقیم به **3X-UI Clients API** متصل می‌شود. برای هر پلن می‌توان حالت تحویل را مستقل روی `Inventory` یا `3X-UI` گذاشت. در حالت 3X-UI، ساخت Client، تمدید، Reset Traffic، حذف، Sync وضعیت، حجم، انقضا و IP Limit از داخل ربات انجام می‌شود.
+کاربر تمام مراحل خرید، پرداخت، دریافت سرویس، تمدید، کیف پول، هدیه و پشتیبانی را مستقیماً داخل تلگرام انجام می‌دهد و ادمین نیز از پنل مدیریتی داخل ربات، کاربران، سفارش‌ها، موجودی، فروش و سرویس‌های 3X-UI را مدیریت می‌کند.
 
-## ✨ امکانات اصلی
+از نسخه **v2.2.0**، هر پلن می‌تواند از دو روش تحویل استفاده کند:
 
-<table>
-  <tr>
-    <td align="center" width="20%"><img src="assets/readme/icons/user-panel.svg" width="64" alt="User panel"/><br/><b>پنل کاربر</b></td>
-    <td align="center" width="20%"><img src="assets/readme/icons/admin-panel.svg" width="64" alt="Admin panel"/><br/><b>پنل ادمین</b></td>
-    <td align="center" width="20%"><img src="assets/readme/icons/wallet.svg" width="64" alt="Wallet"/><br/><b>کیف پول</b></td>
-    <td align="center" width="20%"><img src="assets/readme/icons/referral.svg" width="64" alt="Referral"/><br/><b>Referral</b></td>
-    <td align="center" width="20%"><img src="assets/readme/icons/gift.svg" width="64" alt="Gift"/><br/><b>Gift Code</b></td>
-  </tr>
-</table>
-
-<p align="center">
-  <img src="assets/readme/icons/xui.svg" width="72" alt="3X-UI automation"/><br/>
-  <strong>Direct 3X-UI Automation</strong>
-</p>
-
-### 🔌 اتصال مستقیم 3X-UI
-
-- اتصال با API Token به Clients API جدید 3X-UI
-- سازگار با مدل Client-first و Multi-Inbound نسخه‌های جدید
-- ساخت خودکار Client پس از تأیید سفارش
-- انتخاب یک یا چند `Inbound ID` برای هر پلن
-- تعیین Traffic Quota بر حسب GB برای هر پلن
-- تعیین IP Limit برای هر پلن
-- تنظیم Expiry بر اساس مدت پلن
-- دریافت لینک‌های واقعی Client از خود 3X-UI در صورت نبود Subscription Template
-- تمدید همان Client قبلی به‌جای ساخت Client تکراری
-- Reset Traffic هنگام تمدید
-- نمایش وضعیت زنده، حجم مصرفی/باقی‌مانده و تاریخ انقضا برای کاربر
-- Sync و حذف Client از پنل ادمین
-- مرکز اتصال 3X-UI و Health Check داخل پنل ادمین
-- ثبت نگاشت محلی `Order ↔ User ↔ 3X-UI Client` برای Retry امن
-- جلوگیری از ساخت Client تکراری اگر ساخت Remote موفق شود ولی تحویل Telegram موقتاً شکست بخورد
-- Legacy mode اختیاری برای پنل‌های قدیمی‌تر
-
-### 👤 پنل کاربران
-
-- ثبت خودکار کاربر در اولین ورود
-- مشاهده و خرید پلن‌های فعال
-- ایجاد سفارش و ارسال فیش پرداخت
-- پرداخت با موجودی کیف پول
-- شارژ کیف پول و ارسال فیش شارژ
-- استفاده از کد تخفیف
-- تحویل کانفیگ پس از تأیید سفارش
-- مشاهده سرویس‌های خریداری‌شده و جزئیات سفارش‌ها
-- مشاهده تاریخ خرید، تاریخ انقضا و وضعیت سرویس
-- مشاهده وضعیت لحظه‌ای سرویس‌های 3X-UI شامل مصرف، مانده حجم، انقضا و IP Limit
-- درخواست تمدید سرویس
-- دریافت مجدد کانفیگ‌های طولانی به‌صورت فایل محافظت‌شده
-- خرید سرویس به‌عنوان هدیه
-- دریافت هدیه با Gift Code
-- دریافت اکانت تست از موجودی تست
-- سیستم دعوت دوستان و Referral
-- دریافت کمیسیون Referral در کیف پول
-- نمایش سطح مشتری و پیشرفت VIP
-- ثبت و پیگیری تیکت پشتیبانی
-
-### 👑 پنل ادمین
-
-- مشاهده داشبورد آماری فروش و عملیات، به‌همراه آمار سرویس‌های 3X-UI
-- مرکز 3X-UI برای Health Check، Sync و مدیریت سرویس‌های Remote
-- بررسی، تأیید و رد فیش‌های سفارش
-- مشاهده **نام خریدار + پلن خریداری‌شده** در لیست سفارش‌ها
-- مشاهده ریز خریدهای هر کاربر از پروفایل ادمین
-- مدیریت کاربران، مسدودسازی و جستجو
-- ثبت یادداشت خصوصی برای هر کاربر
-- مدیریت پلن‌ها و بایگانی امن پلن‌ها
-- مدیریت Inventory کانفیگ‌ها
-- مشاهده موجودی آزاد، رزروشده و مصرف‌شده
-- جستجوی کانفیگ‌ها و جستجوی سراسری
-- مدیریت کیف پول کاربران و درخواست‌های شارژ
-- مدیریت Coupon / کد تخفیف
-- مدیریت Gift Code و سرویس‌های هدیه
-- مدیریت موجودی و درخواست اکانت تست
-- بررسی دستی کاربران مشکوک برای اکانت تست
-- مدیریت تیکت‌های پشتیبانی
-- Broadcast همگانی و پیام هدفمند به Segmentها
-- Segmentهای VIP، وفادار، از‌دست‌رفته و مشکوک
-- گزارش فروش روزانه/ماهانه
-- تاریخچه تحویل سرویس و اکانت تست
-- خروجی CSV از داده‌های مدیریتی
-- بکاپ دیتابیس
-- تنظیمات فروشگاه و Premium Emojiهای منوی کاربر
-
-### ⚙️ عملیات خودکار
-
-<p align="center"><img src="assets/readme/icons/automation.svg" width="72" alt="Automation"/></p>
-
-ربات یک حلقه‌ی نگهداری پس‌زمینه دارد که در کنار Long Polling اجرا می‌شود و کارهای عملیاتی را انجام می‌دهد، از جمله:
-
-- هشدار کمبود موجودی پلن‌ها
-- هشدار کمبود اکانت تست
-- اعلان نزدیک‌شدن به تاریخ انقضا
-- اعلان سرویس منقضی‌شده
-- لغو سفارش‌های پرداخت‌نشده‌ی قدیمی طبق تنظیمات
-- گزارش‌های دوره‌ای
-- پاک‌سازی/کنترل Log
-- بازیابی رزروهای نیمه‌کاره پس از Restart
-- بازیابی Gift Redemption نیمه‌کاره در صورت Crash
-
-## 🧠 مدل داده و ذخیره‌سازی
-
-<p align="center"><img src="assets/readme/icons/database.svg" width="72" alt="SQLite database"/></p>
-
-پروژه از **SQLite** استفاده می‌کند. اطلاعات اصلی شامل کاربران، پلن‌ها، موجودی، سفارش‌ها، کیف پول، Referral، Gift Code، اکانت تست، تیکت‌ها، تنظیمات، Audit و گزارش‌های تحویل داخل دیتابیس پروژه نگهداری می‌شوند.
-
-چند نکته‌ی مهم در لایه‌ی Storage:
-
-- Foreign Keyها فعال هستند.
-- Transactionهای SQLite پس از `with` واقعاً بسته می‌شوند.
-- Migrationهای امن برای دیتابیس نسخه‌های قبلی وجود دارد.
-- Integrity Check هنگام Startup انجام می‌شود.
-- رزروهای قدیمی و Giftهای نیمه‌کاره بازیابی می‌شوند.
-- ارتباط دقیق `user_id` با سفارش و `plan_title` حفظ می‌شود.
+* `Inventory` — تحویل کانفیگ‌های از قبل ثبت‌شده
+* `3X-UI` — ساخت و مدیریت خودکار Client از طریق API
 
 ---
 
-<a id="project-structure"></a>
-## 🧱 ساختار پروژه
+<h2>
+  <img src="assets/readme/icons/user-panel.svg" width="32" valign="middle">
+  پنل کاربران
+</h2>
+
+* ثبت خودکار کاربر با `/start`
+* مشاهده و خرید پلن‌ها
+* ایجاد سفارش
+* ارسال فیش پرداخت
+* پرداخت با کیف پول
+* شارژ کیف پول
+* استفاده از Coupon
+* دریافت خودکار سرویس
+* مشاهده سرویس‌های خریداری‌شده
+* مشاهده تاریخ خرید و انقضا
+* مشاهده وضعیت لحظه‌ای سرویس
+* نمایش حجم مصرف‌شده
+* نمایش حجم باقی‌مانده
+* نمایش IP Limit
+* درخواست تمدید
+* دریافت مجدد کانفیگ
+* خرید سرویس هدیه
+* دریافت Gift Code
+* دریافت اکانت تست
+* سیستم Referral
+* دریافت کمیسیون Referral
+* سیستم VIP
+* تیکت پشتیبانی
+
+---
+
+<h2>
+  <img src="assets/readme/icons/admin-panel.svg" width="32" valign="middle">
+  پنل ادمین
+</h2>
+
+* داشبورد آماری فروش
+* مشاهده کاربران
+* مشاهده سفارش‌ها
+* مشاهده **خریدار + پلن خریداری‌شده**
+* تاریخچه کامل خرید هر کاربر
+* جستجوی کاربران
+* Block / Unblock
+* یادداشت خصوصی ادمین
+* مدیریت پلن‌ها
+* مدیریت Inventory
+* مدیریت فیش‌های پرداخت
+* تأیید یا رد سفارش
+* مدیریت کیف پول کاربران
+* مدیریت درخواست شارژ
+* مدیریت Coupon
+* مدیریت Gift Code
+* مدیریت اکانت تست
+* مدیریت تیکت‌ها
+* Broadcast
+* پیام به Segmentهای مختلف
+* گزارش فروش
+* CSV Export
+* Database Backup
+* مدیریت تنظیمات فروشگاه
+
+---
+
+<h2>
+  <img src="assets/readme/icons/xui.svg" width="34" valign="middle">
+  اتصال مستقیم 3X-UI
+</h2>
+
+Zankode می‌تواند به‌صورت مستقیم به **3X-UI** متصل شود و Clientهای VPN را مدیریت کند.
+
+### قابلیت‌ها
+
+* اتصال با API Token
+* ساخت Client بعد از تأیید سفارش
+* انتخاب `Inbound ID`
+* پشتیبانی از چند Inbound
+* تعیین Traffic Quota
+* تعیین مدت سرویس
+* تعیین Expiry
+* تعیین IP Limit
+* دریافت لینک واقعی Client
+* دریافت وضعیت Client
+* مشاهده Traffic
+* تمدید Client
+* Reset Traffic
+* Sync Client
+* حذف Remote Client
+* Health Check پنل
+* پشتیبانی اختیاری از Legacy X-UI
+
+Zankode ارتباط زیر را در دیتابیس نگهداری می‌کند:
 
 ```text
-Zankode-VPN/
-├── main.py
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── README.md
-├── CHANGELOG.md
+User
+  ↓
+Order
+  ↓
+Plan
+  ↓
+3X-UI Client
+```
+
+بنابراین اگر Client روی 3X-UI ساخته شود ولی ارسال پیام تلگرام موقتاً شکست بخورد، Retry بعدی **Client جدید ایجاد نمی‌کند** و همان سرویس قبلی را تحویل می‌دهد.
+
+---
+
+<h2>
+  <img src="assets/readme/icons/wallet.svg" width="32" valign="middle">
+  کیف پول
+</h2>
+
+* موجودی مستقل برای هر کاربر
+* پرداخت سفارش با Wallet
+* درخواست افزایش موجودی
+* تأیید شارژ توسط ادمین
+* ثبت تراکنش‌ها
+* پاداش Referral
+* پاداش‌های فروشگاهی
+
+---
+
+<h2>
+  <img src="assets/readme/icons/referral.svg" width="32" valign="middle">
+  Referral System
+</h2>
+
+* لینک اختصاصی دعوت
+* ثبت Referrer
+* محاسبه پاداش
+* واریز کمیسیون
+* مشاهده Referralها
+* سیستم سطح و وفاداری مشتری
+
+---
+
+<h2>
+  <img src="assets/readme/icons/gift.svg" width="32" valign="middle">
+  Gift System
+</h2>
+
+* خرید سرویس برای دیگران
+* تولید Gift Code
+* دریافت Gift Code
+* بازیابی Gift نیمه‌کاره بعد از Crash
+* جلوگیری از استفاده مجدد هدیه
+
+---
+
+<h2>
+  <img src="assets/readme/icons/automation.svg" width="32" valign="middle">
+  عملیات خودکار
+</h2>
+
+Zankode یک Background Operations Loop دارد که در کنار Telegram Long Polling اجرا می‌شود.
+
+از جمله:
+
+* هشدار کمبود موجودی
+* هشدار کمبود اکانت تست
+* اعلان نزدیک شدن به انقضا
+* اعلان سرویس منقضی‌شده
+* پاک‌سازی سفارش‌های قدیمی
+* گزارش‌های دوره‌ای
+* کنترل Logها
+* بازیابی Reservationهای نیمه‌کاره
+* بازیابی Gift Redemption بعد از Crash
+
+---
+
+<h2>
+  <img src="assets/readme/icons/database.svg" width="32" valign="middle">
+  Database
+</h2>
+
+Zankode از **SQLite** استفاده می‌کند.
+
+اطلاعات زیر داخل دیتابیس مدیریت می‌شوند:
+
+* Users
+* Plans
+* Orders
+* Inventory
+* Wallet
+* Wallet Transactions
+* Coupons
+* Referral
+* Gift Codes
+* Test Accounts
+* Tickets
+* Settings
+* Delivery History
+* Audit Data
+* 3X-UI Client Mapping
+
+یکی از بخش‌های مهم ساختار دیتابیس ارتباط دقیق:
+
+```text
+User ↔ Order ↔ Plan
+```
+
+است؛ بنابراین ادمین می‌تواند دقیقاً ببیند **هر کاربر چه پلنی خریداری کرده است**.
+
+---
+
+# 📁 Project Structure
+
+```text
+zankode-telegram-vpn-bot/
 │
-├── docs/
-│   └── 3xui-setup.md
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 │
 ├── assets/
 │   └── readme/
@@ -174,9 +267,8 @@ Zankode-VPN/
 │           ├── workflow.svg
 │           └── xui.svg
 │
-├── .github/
-│   └── workflows/
-│       └── ci.yml
+├── docs/
+│   └── 3xui-setup.md
 │
 ├── tests/
 │   ├── test_admin_purchase_views.py
@@ -184,141 +276,161 @@ Zankode-VPN/
 │   ├── test_smoke.py
 │   └── test_xui.py
 │
-└── zankode/
-    ├── __init__.py
-    ├── __main__.py
-    ├── app.py
-    ├── config.py
-    ├── services.py
-    ├── storage.py
-    ├── ui.py
-    ├── utils.py
-    ├── xui.py
-    │
-    └── handlers/
-        ├── __init__.py
-        ├── admin.py
-        ├── admin_views.py
-        ├── commands.py
-        ├── messages.py
-        ├── router.py
-        └── user.py
+├── zankode/
+│   ├── handlers/
+│   │   ├── __init__.py
+│   │   ├── admin.py
+│   │   ├── admin_views.py
+│   │   ├── commands.py
+│   │   ├── messages.py
+│   │   ├── router.py
+│   │   └── user.py
+│   │
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── app.py
+│   ├── config.py
+│   ├── services.py
+│   ├── storage.py
+│   ├── ui.py
+│   ├── utils.py
+│   └── xui.py
+│
+├── .env.example
+├── .gitignore
+├── CHANGELOG.md
+├── main.py
+├── README.md
+└── requirements.txt
 ```
-
-### 📁 وظیفه‌ی فایل‌ها
-
-<table>
-  <tr>
-    <td align="center"><img src="assets/readme/icons/folder.svg" width="48" alt="Folder"/><br/><b>Folder</b><br/>گروه‌بندی ماژول‌ها و فایل‌ها</td>
-    <td align="center"><img src="assets/readme/icons/file.svg" width="48" alt="File"/><br/><b>File</b><br/>هر فایل یک مسئولیت مشخص دارد</td>
-    <td align="center"><img src="assets/readme/icons/workflow.svg" width="48" alt="Workflow"/><br/><b>Workflow</b><br/>دستور اجرای خودکار برای GitHub Actions</td>
-  </tr>
-</table>
-
-| مسیر | وظیفه |
-|---|---|
-| `main.py` | Entry Point ساده برای اجرای پروژه با `python main.py` |
-| `requirements.txt` | Dependencyهای Python پروژه |
-| `.env.example` | الگوی متغیرهای محرمانه و تنظیمات محیطی |
-| `.gitignore` | جلوگیری از Commit شدن `.env`، دیتابیس، Log و فایل‌های Runtime |
-| `CHANGELOG.md` | تاریخچه تغییرات نسخه‌ها |
-| `assets/readme/` | تمام تصاویر و آیکون‌های README؛ فقط SVG |
-| `zankode/app.py` | ساخت Telegram Application، ثبت Handlerها، Startup و Long Polling |
-| `zankode/config.py` | تنظیمات اصلی، متغیرهای محیطی، ثابت‌ها، Logging و Premium Emoji |
-| `zankode/storage.py` | Schema، Migration، Queryها، Transactionها و منطق دیتابیس SQLite |
-| `zankode/services.py` | تحویل کانفیگ، Gift، Provision/Sync سرویس 3X-UI، هشدارها، Backup و عملیات دوره‌ای |
-| `zankode/xui.py` | Adapter مستقل برای Clients API جدید 3X-UI و Legacy X-UI |
-| `zankode/ui.py` | متن‌ها، Keyboardها، Buttonها و View helperهای رابط تلگرام |
-| `zankode/utils.py` | توابع کمکی، زمان ایران، فرمت پول، اعتبارسنجی و ابزارهای عمومی |
-| `handlers/commands.py` | Commandهایی مانند `/start`، `/admin`، `/account` و ... |
-| `handlers/router.py` | Router مرکزی Callback Queryهای دکمه‌های Inline |
-| `handlers/user.py` | جریان‌ها و عملیات سمت کاربر |
-| `handlers/admin.py` | Actionها و Callbackهای مدیریتی |
-| `handlers/admin_views.py` | صفحات مدیریتی، لیست‌ها، گزارش‌ها، Export CSV و Viewهای ادمین |
-| `handlers/messages.py` | دریافت فیش، پیام متنی، Broadcast و Actionهای وابسته به Message |
-| `tests/` | تست‌های خودکار دیتابیس، سرویس‌ها، نمایش خریدها و اتصال شبیه‌سازی‌شده 3X-UI |
-| `docs/3xui-setup.md` | راهنمای تنظیم API Token، Inbound و متغیرهای محیطی 3X-UI |
 
 ---
 
-<a id="github-actions"></a>
-## 🔁 GitHub Actions / CI
+<h2>
+  <img src="assets/readme/icons/folder.svg" width="30" valign="middle">
+  پوشه‌های پروژه
+</h2>
 
-<p align="center"><img src="assets/readme/icons/ci.svg" width="72" alt="Continuous Integration"/></p>
+| Path                 | Description                  |
+| -------------------- | ---------------------------- |
+| `zankode/`           | هسته اصلی Zankode VPN        |
+| `zankode/handlers/`  | منطق پنل کاربر و ادمین       |
+| `tests/`             | تست‌های خودکار               |
+| `docs/`              | مستندات پروژه                |
+| `assets/readme/`     | فایل‌های SVG مربوط به README |
+| `.github/workflows/` | GitHub Actions               |
 
-فایل زیر:
+---
+
+<h2>
+  <img src="assets/readme/icons/file.svg" width="30" valign="middle">
+  فایل‌های اصلی
+</h2>
+
+| File                  | Description                      |
+| --------------------- | -------------------------------- |
+| `main.py`             | Entry Point پروژه                |
+| `zankode/app.py`      | اجرای Telegram Application       |
+| `zankode/config.py`   | تنظیمات پروژه                    |
+| `zankode/storage.py`  | SQLite و Queryها                 |
+| `zankode/services.py` | عملیات سرویس و Background Jobs   |
+| `zankode/xui.py`      | ارتباط با 3X-UI                  |
+| `zankode/ui.py`       | رابط Telegram                    |
+| `zankode/utils.py`    | توابع کمکی                       |
+| `.env.example`        | نمونه Environment Variables      |
+| `.gitignore`          | جلوگیری از Commit فایل‌های خصوصی |
+| `CHANGELOG.md`        | تاریخچه نسخه‌ها                  |
+| `requirements.txt`    | Python Dependencies              |
+
+---
+
+<h2>
+  <img src="assets/readme/icons/workflow.svg" width="30" valign="middle">
+  GitHub Workflow
+</h2>
+
+فایل:
 
 ```text
 .github/workflows/ci.yml
 ```
 
-یک **Workflow خودکار GitHub Actions** است. هر بار که روی Repository `push` انجام شود یا Pull Request ساخته شود، GitHub روی یک ماشین Ubuntu تمیز پروژه را بررسی می‌کند.
+مخصوص **GitHub Actions** است.
 
-Workflow فعلی پروژه این مراحل را انجام می‌دهد:
+این Workflow بعد از `push` یا `pull_request`:
 
-1. دریافت سورس با `actions/checkout@v4`
-2. اجرای جداگانه روی Python `3.10`، `3.11` و `3.12`
-3. نصب `requirements.txt`
-4. Compile کردن تمام فایل‌های Python
-5. اجرای تمام Unit Testهای پوشه `tests/`
-
-در نتیجه اگر تغییری باعث Syntax Error یا شکست تست‌ها شود، قبل از Merge شدن روی GitHub با علامت ❌ مشخص می‌شود.
-
-> [!NOTE]
-> پوشه `.github/workflows` بخشی از خود برنامه‌ی Telegram نیست و روی سرور Bot اجرا نمی‌شود. این پوشه فقط به **GitHub** می‌گوید هنگام Push/PR چه تست‌های خودکاری اجرا کند.
+1. سورس پروژه را دریافت می‌کند
+2. Python را نصب می‌کند
+3. Dependencyها را نصب می‌کند
+4. کل پروژه را Compile می‌کند
+5. Unit Testها را اجرا می‌کند
 
 ---
 
-## ⚙️ پیش‌نیازها
+<h2>
+  <img src="assets/readme/icons/ci.svg" width="30" valign="middle">
+  Continuous Integration
+</h2>
 
-- Python **3.10+**
-- Telegram Bot Token
-- Telegram numeric Admin User ID
-- SQLite 3
-
-Dependencyهای اصلی:
+CI پروژه روی نسخه‌های:
 
 ```text
-python-telegram-bot==22.8
-httpx>=0.27,<1
-python-dotenv>=1.0,<2
+Python 3.10
+Python 3.11
+Python 3.12
 ```
 
-## 🚀 نصب و اجرا
+اجرا می‌شود.
 
-### 1. Clone
+تست‌ها:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Zankode-VPN.git
-cd Zankode-VPN
+python -m unittest discover -s tests -v
 ```
 
-### 2. ساخت Virtual Environment
+Compile check:
 
-Linux / macOS:
+```bash
+python -m compileall -q .
+```
+
+---
+
+# ⚙️ Installation
+
+## 1. Clone
+
+```bash
+git clone https://github.com/zankode/zankode-telegram-vpn-bot.git
+cd zankode-telegram-vpn-bot
+```
+
+## 2. Virtual Environment
+
+### Linux / macOS
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Windows PowerShell:
+### Windows
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
-### 3. نصب Dependencyها
+## 3. Install Dependencies
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-### 4. ساخت `.env`
+## 4. Create `.env`
 
-Linux / macOS:
+Linux:
 
 ```bash
 cp .env.example .env
@@ -330,34 +442,21 @@ Windows:
 copy .env.example .env
 ```
 
-محتوای نمونه:
+Example:
 
 ```env
 BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
 ADMIN_USER_ID=123456789
 DB_FILE=config_shop.db
 
-XUI_PANEL_URL=https://panel.example.com/secret-path
+XUI_PANEL_URL=https://panel.example.com
 XUI_API_TOKEN=YOUR_3XUI_API_TOKEN
 XUI_API_MODE=modern
 XUI_VERIFY_TLS=1
 XUI_TIMEOUT=15
-# Optional: if empty, Zankode can fall back to 3X-UI generated client links
-XUI_SUB_URL_TEMPLATE=https://sub.example.com/sub/{sub_id}
 ```
 
-| متغیر | توضیح |
-|---|---|
-| `BOT_TOKEN` | توکن دریافتی از BotFather |
-| `ADMIN_USER_ID` | ID عددی ادمین اصلی |
-| `DB_FILE` | مسیر یا نام فایل SQLite |
-| `XUI_PANEL_URL` | آدرس پنل 3X-UI همراه Base Path در صورت وجود |
-| `XUI_API_TOKEN` | API Token پنل برای Clients API |
-| `XUI_API_MODE` | حالت `modern`، `legacy` یا `auto` |
-| `XUI_VERIFY_TLS` | بررسی معتبر بودن TLS؛ در Production روشن بماند |
-| `XUI_SUB_URL_TEMPLATE` | اختیاری؛ قالب لینک Subscription با `{sub_id}` |
-
-### 5. اجرا
+## 5. Run
 
 ```bash
 python main.py
@@ -369,215 +468,172 @@ python main.py
 python -m zankode
 ```
 
-پس از اجرا، Bot با **Long Polling** شروع به کار می‌کند و کاربر از `/start` وارد منوی اصلی می‌شود.
+---
 
-## 🧪 اجرای تست‌ها
+# 🔐 Security
 
-```bash
-python -m unittest discover -s tests -v
+هرگز موارد زیر را داخل GitHub قرار ندهید:
+
+* `.env`
+* Telegram Bot Token
+* 3X-UI API Token
+* Password
+* Production Database
+* Customer Data
+* Runtime Logs
+* Private CSV Exports
+
+فقط فایل:
+
+```text
+.env.example
 ```
 
-بررسی Compile:
-
-```bash
-python -m compileall -q .
-```
-
-## 🔐 نکات امنیتی قبل از انتشار
-
-- فایل `.env` را هرگز Commit نکنید.
-- Bot Token واقعی را داخل README، Issue، Screenshot یا Log قرار ندهید.
-- API Token، آدرس خصوصی پنل و Credentialهای 3X-UI را هم هرگز Commit نکنید.
-- فایل دیتابیس واقعی مشتریان را روی GitHub قرار ندهید.
-- قبل از Public کردن Repository، یک بار `git status` و `.gitignore` را بررسی کنید.
-- برای Bot Production از یک سرور با Backup منظم استفاده کنید.
-- دسترسی Admin را فقط به Telegram User ID مورد اعتماد بدهید.
-- اگر پروژه را عمومی می‌کنید، قبل از انتشار نوع License را آگاهانه انتخاب کنید.
-
-## 🧩 تست‌شده در v2.2.0
-
-- Database initialization & integrity checks
-- Buyer ↔ Order ↔ Plan mapping
-- Admin purchase views
-- Retry behavior for stock/expiry notifications
-- Long configuration delivery & failed-delivery safety
-- Legacy brand migration & Gift crash recovery
-- 3X-UI modern API Bearer authentication contract
-- 3X-UI Client creation + read-back
-- Server-generated credential model for modern 3X-UI
-- 3X-UI direct client-link fallback
-- Live traffic/status parsing
-- Renewal + quota/IP update + traffic reset
-- Idempotent retry after Telegram delivery failure
-
-در بسته‌ی Release، تست‌های شبکه‌ای 3X-UI با `httpx.MockTransport` اجرا می‌شوند تا بدون نیاز به سرور واقعی، Request/Response contract و سناریوهای خطا قابل تکرار باشند. تست واقعی شبکه به آدرس و Token محیط Production وابسته است.
+باید داخل Repository قرار بگیرد.
 
 ---
 
-<a id="en"></a>
-# 🇬🇧 English Overview
+# 🧪 Tests
 
-**Zankode VPN** is a modular Telegram bot for **selling, tracking, delivering, and operating VPN configuration services**. Users complete the purchase flow directly inside Telegram, while administrators manage orders, buyers, inventory, wallets, referrals, gift codes, test accounts, reports, support tickets, and routine operations from an in-bot admin panel.
+Zankode شامل تست‌های خودکار برای بخش‌های مهم پروژه است:
 
-> [!IMPORTANT]
-> Starting with **v2.2.0**, Zankode VPN supports both internal inventory delivery and direct **3X-UI Clients API** provisioning. Each plan can independently use `Inventory` or `3X-UI` mode. In 3X-UI mode the bot can create, renew, reset traffic, delete and synchronize client state without touching the panel database directly.
+* Database initialization
+* Buyer / Order / Plan mapping
+* Admin purchase history
+* Notification retry
+* Gift recovery
+* Long config delivery
+* 3X-UI authentication
+* Client creation
+* Client status
+* Client links
+* Traffic
+* Renewal
+* Reset Traffic
+* Delete Client
+* Safe Retry
 
-## ✨ Features
+---
 
-### 🔌 Direct 3X-UI Automation
+# 🇬🇧 English
 
-- API-token authentication against the modern 3X-UI Clients API
-- Automatic client provisioning after payment approval
-- Per-plan inbound IDs, traffic quota, expiry and IP limit
-- Safe renewal of the existing remote client
-- Traffic reset during renewal
-- Live user status with usage, remaining traffic and expiry
-- Admin health check, sync and remote-client deletion
-- Local `Order ↔ User ↔ Client` mapping for crash-safe/idempotent retries
-- Delivery using an explicit subscription template or panel-generated client links
-- Optional legacy X-UI compatibility mode
+**Zankode VPN** is a modular Telegram-based VPN sales and management system with optional direct **3X-UI / Xray** integration.
 
-### 👤 User Panel
+Users can purchase, receive, renew and manage their VPN services directly inside Telegram.
 
-- Automatic registration on first interaction
-- Browse and purchase active plans
-- Receipt-based order flow
-- Wallet payments and wallet top-ups
-- Coupon support
-- Automatic or admin-approved config delivery
-- Purchased services and order history
-- Live 3X-UI service status and usage refresh
-- Purchase and expiry information
-- Renewal requests
-- Safe re-delivery of long configurations as protected files
-- Gift purchases and Gift Code redemption
-- Test-account inventory
-- Referral links and referral commissions
-- Buyer bonus and wallet rewards
-- VIP/customer-level progress
-- Support tickets
+Administrators can manage:
 
-### 👑 Admin Panel
+* Users
+* Orders
+* Plans
+* Inventory
+* Wallets
+* Coupons
+* Gift Codes
+* Referrals
+* Test Accounts
+* Support Tickets
+* Sales Reports
+* Backups
+* 3X-UI Clients
 
-- Operational dashboard with 3X-UI service metrics
-- 3X-UI connection center, health check, sync and deletion controls
-- Approve/reject payment receipts
-- See **buyer name + purchased plan** in order lists
-- Open the complete purchase history of a specific user
-- User search, blocking, notes, and account management
-- Plan management and safe plan archiving
-- Config inventory management
-- Available/reserved/used stock visibility
-- Config search and global search
-- Wallet adjustments and top-up approval
-- Coupon management
-- Gift management
-- Test-account inventory and suspicious-request review
-- Support-ticket management
-- Global and segmented broadcasts
-- VIP / loyal / lost / suspicious user segments
-- Sales reports and delivery history
-- CSV exports
-- Database backups
-- Store settings and Telegram Premium Emoji configuration
+---
 
-## ⚙️ Background Operations
+<h2>
+  <img src="assets/readme/icons/xui.svg" width="32" valign="middle">
+  3X-UI Integration
+</h2>
 
-The bot runs an operations loop alongside Telegram long polling. It handles low-stock warnings, test-stock warnings, expiry notifications, old unpaid-order cleanup, scheduled reports, log maintenance, stale reservation recovery, and crash-safe gift redemption recovery.
+Zankode can automatically:
 
-## 🧱 Architecture
+* Create clients
+* Set traffic quota
+* Set expiry
+* Set IP limits
+* Retrieve client links
+* Read live usage
+* Renew services
+* Reset traffic
+* Synchronize client state
+* Delete remote clients
+* Perform health checks
 
-```text
-Telegram
-   │
-   ▼
-Zankode Application
-   ├── Commands
-   ├── Callback Router
-   ├── User Flows
-   ├── Admin Flows
-   ├── Message / Receipt Flows
-   │
-   ├── UI Layer
-   ├── Services Layer
-   ├── Storage Layer ─────► SQLite
-   │
-   └── 3X-UI Adapter ─────► 3X-UI Clients API ─────► Xray
-```
+---
 
-The application uses **long polling**, so a public webhook endpoint or web dashboard is not required for the Telegram bot itself.
+<h2>
+  <img src="assets/readme/icons/admin-panel.svg" width="32" valign="middle">
+  Admin Panel
+</h2>
 
-## 🚀 Quick Start
+The Telegram-based admin panel provides:
+
+* Sales dashboard
+* User management
+* Order management
+* Buyer purchase history
+* Inventory management
+* Wallet management
+* Coupon management
+* Gift management
+* Support tickets
+* Broadcasts
+* Reports
+* CSV exports
+* Database backups
+* 3X-UI management
+
+---
+
+<h2>
+  <img src="assets/readme/icons/user-panel.svg" width="32" valign="middle">
+  User Panel
+</h2>
+
+Users can:
+
+* Browse plans
+* Purchase VPN services
+* Upload payment receipts
+* Pay with wallet balance
+* View purchased services
+* Check live traffic
+* Check expiry
+* Request renewal
+* Redeem gifts
+* Invite friends
+* Earn referral rewards
+* Open support tickets
+
+---
+
+# 🚀 Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Zankode-VPN.git
-cd Zankode-VPN
+git clone https://github.com/zankode/zankode-telegram-vpn-bot.git
+cd zankode-telegram-vpn-bot
+
 python -m venv .venv
-```
-
-Linux / macOS:
-
-```bash
-source .venv/bin/activate
-```
-
-Windows PowerShell:
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-Install dependencies:
-
-```bash
-python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-```
-
-Create `.env` from `.env.example`:
-
-```env
-BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
-ADMIN_USER_ID=123456789
-DB_FILE=config_shop.db
-XUI_PANEL_URL=https://panel.example.com/secret-path
-XUI_API_TOKEN=YOUR_3XUI_API_TOKEN
-XUI_API_MODE=modern
-XUI_VERIFY_TLS=1
-# Optional; when omitted, Zankode can deliver panel-generated client links
-XUI_SUB_URL_TEMPLATE=https://sub.example.com/sub/{sub_id}
-```
-
-Run:
-
-```bash
 python main.py
 ```
 
-or:
+---
 
-```bash
-python -m zankode
+# 📜 Version
+
+Current release:
+
+```text
+Zankode VPN v2.2.0
 ```
-
-## 🧪 Tests
-
-```bash
-python -m unittest discover -s tests -v
-python -m compileall -q .
-```
-
-## 🔁 Continuous Integration
-
-The repository contains `.github/workflows/ci.yml`. On every push and pull request, GitHub Actions runs the project on Ubuntu with Python **3.10, 3.11, and 3.12**, installs dependencies, compiles the source, and executes the test suite.
-
-## 🔐 Security
-
-Never commit `.env`, a production database, Telegram/3X-UI API tokens, panel credentials, customer data, runtime logs, or exported private CSV files. Review the repository state before making it public.
 
 ---
 
 <p align="center">
-  Built for a clean, maintainable Telegram-based VPN sales workflow.<br/>
-  <strong>Zankode VPN • v2.2.0</strong>
+  <strong>Zankode VPN</strong><br>
+  Telegram VPN Store & 3X-UI Manager
+</p>
+
+<p align="center">
+  If you find this project useful, consider giving it a ⭐ on GitHub.
 </p>
