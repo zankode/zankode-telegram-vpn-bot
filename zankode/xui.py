@@ -335,12 +335,32 @@ class XUIClient:
         )
 
         if self.settings.api_mode in {"modern", "auto"} and self.settings.api_token:
-            payload = await self._modern_request(
-                "POST", "panel/api/clients/add",
-                json_body={"client": client_data, "inboundIds": inbound_ids},
-            )
-            # Read-back catches malformed/partially-created clients and API regressions.
-            readback = await self.get_client(email)
+            existing = await self.get_client_optional(email)
+            payload: dict[str, Any] = {"recovered": True}
+            if existing is None:
+                try:
+                    payload = await self._modern_request(
+                        "POST", "panel/api/clients/add",
+                        json_body={"client": client_data, "inboundIds": inbound_ids},
+                    )
+                except XUIError:
+                    existing = await self.get_client_optional(email)
+                    if existing is None:
+                        raise
+            readback = existing or await self.get_client(email)
+            await self.reconcile_inbounds(email, inbound_ids)
+            current = readback.get("client", {}) if isinstance(readback, dict) else {}
+            desired = {
+                "totalGB": max(0, int(total_bytes)),
+                "expiryTime": max(0, int(expiry_ms)),
+                "limitIp": max(0, int(limit_ip)),
+                "tgId": max(0, int(tg_id)),
+                "comment": comment[:250],
+                "enable": True,
+            }
+            if any(current.get(k) != v for k, v in desired.items()):
+                await self.update_client(email, **desired)
+                readback = await self.get_client(email)
             actual = readback.get("client", {}) if isinstance(readback, dict) else {}
             actual_uuid = str(actual.get("uuid") or actual.get("id") or "")
             actual_sub = str(actual.get("subId") or actual.get("subid") or sub_id)
@@ -348,7 +368,7 @@ class XUIClient:
                 email=email,
                 uuid=actual_uuid,
                 sub_id=actual_sub,
-                inbound_ids=[int(x) for x in (readback.get("inboundIds") or inbound_ids)],
+                inbound_ids=[int(x) for x in (readback.get("inboundIds") or inbound_ids) if str(x).isdigit()],
                 total_bytes=int(actual.get("totalGB") or total_bytes or 0),
                 expiry_ms=int(actual.get("expiryTime") or expiry_ms or 0),
                 limit_ip=int(actual.get("limitIp") or limit_ip or 0),
@@ -402,6 +422,37 @@ class XUIClient:
         if isinstance(obj, dict):
             return {"client": obj, "inboundIds": [obj.get("inboundId")] if obj.get("inboundId") else []}
         raise XUIError("Client در X-UI پیدا نشد")
+
+    async def get_client_optional(self, email: str) -> Optional[dict[str, Any]]:
+        """Return a client when it exists, while preserving transport/auth errors."""
+        try:
+            return await self.get_client(email)
+        except XUIError as exc:
+            text = str(exc).lower()
+            if "http 404" in text or "not found" in text or "پیدا نشد" in text:
+                return None
+            raise
+
+    async def reconcile_inbounds(self, email: str, desired_inbound_ids: Iterable[int]) -> list[int]:
+        """Make modern 3X-UI inbound membership match the frozen order snapshot."""
+        desired = self._clean_inbound_ids(desired_inbound_ids)
+        if not (self.settings.api_mode in {"modern", "auto"} and self.settings.api_token):
+            return desired
+        current = await self.get_client(email)
+        current_ids = [int(x) for x in (current.get("inboundIds") or []) if str(x).isdigit()]
+        missing = [x for x in desired if x not in current_ids]
+        extra = [x for x in current_ids if x not in desired]
+        if missing:
+            await self._modern_request(
+                "POST", f"panel/api/clients/{quote(email, safe='')}/attach",
+                json_body={"inboundIds": missing},
+            )
+        if extra:
+            await self._modern_request(
+                "POST", f"panel/api/clients/{quote(email, safe='')}/detach",
+                json_body={"inboundIds": extra},
+            )
+        return desired
 
     async def _paged_client_row(self, email: str) -> Optional[dict[str, Any]]:
         if not (self.settings.api_mode in {"modern", "auto"} and self.settings.api_token):
@@ -480,27 +531,35 @@ class XUIClient:
         self,
         email: str,
         *,
-        duration_days: int,
+        duration_days: int = 30,
+        target_expiry_ms: Optional[int] = None,
         total_bytes: Optional[int] = None,
         limit_ip: Optional[int] = None,
         reset_traffic: bool = True,
+        tg_id: Optional[int] = None,
+        comment: Optional[str] = None,
     ) -> XUIClientStatus:
+        """Renew to an exact target when supplied, making retries idempotent."""
         status = await self.status(email)
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        base = max(now_ms, int(status.expiry_ms or 0))
-        expiry_ms = base + max(1, int(duration_days)) * 86400 * 1000
+        if target_expiry_ms is None:
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            base = max(now_ms, int(status.expiry_ms or 0))
+            expiry_ms = base + max(1, int(duration_days)) * 86400 * 1000
+        else:
+            expiry_ms = max(0, int(target_expiry_ms))
         await self.update_client(
             email,
             expiryTime=expiry_ms,
             totalGB=(max(0, int(total_bytes)) if total_bytes is not None else status.total_bytes),
             limitIp=(max(0, int(limit_ip)) if limit_ip is not None else status.limit_ip),
+            tgId=(max(0, int(tg_id)) if tg_id is not None else None),
+            comment=(str(comment)[:250] if comment is not None else None),
             enable=True,
         )
         if reset_traffic:
             try:
                 await self.reset_traffic(email)
             except XUIError:
-                # Do not roll back a successful renewal solely because traffic reset failed.
                 pass
         return await self.status(email)
 

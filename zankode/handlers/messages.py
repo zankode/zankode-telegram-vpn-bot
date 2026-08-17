@@ -9,7 +9,7 @@ from ..ui import *
 from ..ui import _user_icon_setting_key
 from ..services import *
 from .admin_views import *
-from .admin_views import _config_preview
+from .admin_views import _config_preview, _broadcast_lock
 from .admin import reject
 
 async def receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,31 +211,14 @@ async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code = m.text.strip().upper()
         g = reserve_gift_redeem(u.id, code)
         if not g:
-            await m.reply_text("❌ کد هدیه معتبر/فعال نیست یا قبلاً استفاده شده.")
+            await m.reply_text("❌ کد هدیه معتبر نیست، قبلاً استفاده شده یا برای کاربر دیگری در حال فعال‌سازی است.")
             return
-        try:
-            await send_protected_credential(
-                context.bot,
-                u.id,
-                "🎉 <b>هدیه شما دریافت شد</b>\n" f"📦 {esc(g['plan_title'])}",
-                str(g["delivered_config"]),
-                f"zankode_gift_{g['id']}.txt",
-                reply_markup=main_kb(u.id),
-            )
-            finish_gift_redeem(int(g["id"]), True)
+        ok = await redeem_gift_service(context, g, u.id)
+        if ok:
             clear_action(u.id)
-            audit(u.id, "gift_redeem", f"gift={g['id']};order={g['order_id']}")
-            try:
-                await context.bot.send_message(
-                    int(g["buyer_user_id"]),
-                    f"🎁 هدیه سفارش #{g['order_id']} توسط کاربر <code>{u.id}</code> دریافت شد.",
-                    parse_mode="HTML"
-                )
-            except TelegramError:
-                pass
-        except TelegramError:
-            finish_gift_redeem(int(g["id"]), False)
-            await m.reply_text("❌ ارسال هدیه ناموفق بود؛ دوباره تلاش کن.")
+            await m.reply_text("✅ هدیه فعال شد و داخل «سرویس‌های من» قابل مشاهده است.", reply_markup=main_kb(u.id))
+        else:
+            await m.reply_text("❌ فعال‌سازی هدیه کامل نشد. همان کد را دوباره ارسال کن؛ مالکیت رزرو برای خودت حفظ شده است.")
         return
 
     if a and a["action"] == "coupon":
@@ -424,8 +407,6 @@ async def admin_action(update, context, a) -> bool:
             ok = await complete_gift_with_config(context, oid, m.text.strip())
         else:
             ok = await send_config(context, o["user_id"], oid, o["plan_title"], m.text.strip())
-            if ok:
-                update_status(oid, COMPLETED, completed=True)
         if ok:
             await notify_referral_qualified(context, int(o["user_id"]), oid)
             if o["plan_id"]:
@@ -582,8 +563,12 @@ async def admin_action(update, context, a) -> bool:
         if not ids:
             await m.reply_text("این سگمنت دیگر کاربری ندارد.", reply_markup=admin_kb())
             return True
-        await broadcast_to_ids(update, context, ids, segment)
-        await m.reply_text("🛡 پنل مدیریت", reply_markup=admin_kb())
+        context.application.create_task(
+            broadcast_to_ids(update, context, ids, segment),
+            update=update,
+            name=f"target-broadcast-{segment}",
+        )
+        await m.reply_text("✅ ارسال در پس‌زمینه شروع شد؛ می‌تونی هم‌زمان از ربات استفاده کنی.", reply_markup=admin_kb())
         return True
 
     if name == "wallet_adjust":
@@ -798,48 +783,54 @@ async def admin_action(update, context, a) -> bool:
 
     if name == "broadcast":
         clear_action(aid)
-        await broadcast(update, context)
+        context.application.create_task(
+            broadcast(update, context),
+            update=update,
+            name="admin-broadcast",
+        )
+        await m.reply_text("✅ ارسال همگانی در پس‌زمینه شروع شد؛ پنل قفل نمی‌شود.", reply_markup=admin_kb())
         return True
 
     return False
 
 async def broadcast(update, context):
-    m = update.effective_message
-    with db() as c:
-        ids = [
-            r["user_id"] for r in c.execute(
-                "SELECT user_id FROM users WHERE is_blocked=0 ORDER BY user_id"
-            ).fetchall()
-        ]
+    async with _broadcast_lock(context):
+        m = update.effective_message
+        with db() as c:
+            ids = [
+                r["user_id"] for r in c.execute(
+                    "SELECT user_id FROM users WHERE is_blocked=0 ORDER BY user_id"
+                ).fetchall()
+            ]
 
-    status = await m.reply_text(f"📢 ارسال به {len(ids)} کاربر شروع شد...")
-    ok = fail = 0
+        status = await m.reply_text(f"📢 ارسال به {len(ids)} کاربر شروع شد...")
+        ok = fail = 0
 
-    for i, uid in enumerate(ids, 1):
-        sent = await copy_message_with_retry(
-            context.bot,
-            chat_id=uid,
-            from_chat_id=m.chat_id,
-            message_id=m.message_id,
-        )
-        if sent:
-            ok += 1
-        else:
-            fail += 1
+        for i, uid in enumerate(ids, 1):
+            sent = await copy_message_with_retry(
+                context.bot,
+                chat_id=uid,
+                from_chat_id=m.chat_id,
+                message_id=m.message_id,
+            )
+            if sent:
+                ok += 1
+            else:
+                fail += 1
 
-        await asyncio.sleep(0.08)
+            await asyncio.sleep(0.08)
 
-        if i % 50 == 0:
-            try:
-                await status.edit_text(f"📢 {i}/{len(ids)}\n✅ {ok} • ❌ {fail}")
-            except TelegramError:
-                pass
+            if i % 50 == 0:
+                try:
+                    await status.edit_text(f"📢 {i}/{len(ids)}\n✅ {ok} • ❌ {fail}")
+                except TelegramError:
+                    pass
 
-    try:
-        await status.edit_text(f"✅ تمام شد.\nموفق: {ok}\nناموفق: {fail}")
-    except TelegramError:
-        pass
+        try:
+            await status.edit_text(f"✅ تمام شد.\nموفق: {ok}\nناموفق: {fail}")
+        except TelegramError:
+            pass
 
-    audit(ADMIN_USER_ID, "broadcast", f"{ok}/{fail}")
-    await m.reply_text("🛡 پنل مدیریت", reply_markup=admin_kb())
+        audit(ADMIN_USER_ID, "broadcast", f"{ok}/{fail}")
+        await m.reply_text("🛡 پنل مدیریت", reply_markup=admin_kb())
 

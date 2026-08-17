@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.2.1 — 2026-08-18
+
+### Reliability & Correctness
+- Service validity now starts on actual delivery/activation instead of order creation.
+- Gift validity starts when the recipient redeems the Gift Code; 3X-UI gift clients are provisioned for the recipient at redemption time.
+- Orders freeze a technical provisioning snapshot (mode, inbound IDs, quota, and IP limit) so later plan edits cannot change an already-created order.
+- 3X-UI renewals now keep one canonical service root instead of appearing as duplicate active services.
+- Inventory renewals are modeled as new delivered credentials rather than falsely extending the old credential.
+- Existing v2.2.0 XUI renewal rows are migrated into a single canonical service mapping.
+- 3X-UI create/renew retries reconcile remote state first and use deterministic exact expiry targets to avoid duplicate clients and double renewal after crashes.
+- Renewal recovery detects an already-applied remote target before replaying traffic reset.
+- Inventory/XUI credentials are durably staged before Telegram delivery, preventing a sent credential from returning to available stock after a crash.
+- Failed credential delivery is retried from the exact staged credential, with bounded automatic retries and an admin alert after repeated failures.
+- Expiry notifications, active-service counts, customer segments, and XUI dashboard metrics use canonical service ownership/root state.
+- Redeemed XUI gifts expose live service status to the recipient.
+
+### Operations & UX
+- Broadcasts run as guarded background tasks so large sends do not block the admin interaction handler and overlapping broadcasts cannot run simultaneously.
+- Tehran time now uses the server timezone directly; order creation no longer depends on an external time website.
+- 3X-UI configuration text correctly treats the subscription URL template as optional.
+- Application shutdown now cancels and awaits the background operations task cleanly.
+- Secret redaction in logs also covers 3X-UI API tokens and legacy passwords.
+- Runtime database ignore rules now cover custom `.db`, `.sqlite`, and `.sqlite3` filenames.
+
+### Testing
+- 29 automated tests cover database migrations, activation timing, plan snapshots, inventory/XUI renewal semantics, gift ownership, staged delivery recovery, XUI create/read/status/renew/reset/delete flows, crash-window reconciliation, admin purchase views, and notification reliability.
+- Full Python source compilation and SQLite integrity checks pass in the local validation environment.
+
 ## 2.2.0 — 2026-08-17
 
 ### Added

@@ -126,15 +126,15 @@ async def process_expiry_notifications(bot):
     warning_end = n + timedelta(days=EXPIRY_WARNING_DAYS)
     with db() as c:
         rows = c.execute(
-            "SELECT * FROM orders WHERE status=? AND expires_at IS NOT NULL "
-            "AND (expiry_warned_at IS NULL OR expired_notified_at IS NULL)",
+            "SELECT * FROM orders WHERE status=? AND id=COALESCE(service_root_order_id,id) "
+            "AND expires_at IS NOT NULL AND (expiry_warned_at IS NULL OR expired_notified_at IS NULL)",
             (COMPLETED,)
         ).fetchall()
     for o in rows:
         exp = parse_db_dt(o["expires_at"])
         if not exp:
             continue
-        target_uid = int(o["user_id"])
+        target_uid = int(o["service_owner_user_id"] or o["user_id"])
         gift = gift_for_order(int(o["id"])) if int(o["is_gift"] or 0) else None
         if gift and gift["status"] == "redeemed" and gift["recipient_user_id"]:
             target_uid = int(gift["recipient_user_id"])
@@ -263,10 +263,31 @@ def trim_bot_log_if_needed(
     except OSError:
         log.warning("bot.log size maintenance failed")
 
+async def retry_staged_deliveries(app: Application):
+    """Retry credentials safely staged before a prior Telegram/crash failure."""
+    cutoff = db_dt(iran_now() - timedelta(seconds=30))
+    with db() as c:
+        rows = c.execute(
+            "SELECT id FROM orders WHERE status=? AND COALESCE(is_gift,0)=0 "
+            "AND delivered_config IS NOT NULL AND delivered_config<>'' "
+            "AND COALESCE(delivery_attempts,0)<5 AND updated_at<=? "
+            "ORDER BY updated_at,id LIMIT 10",
+            (APPROVED, cutoff),
+        ).fetchall()
+    for row in rows:
+        try:
+            await fulfill_approved_order(app, int(row["id"]), actor="recovery")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("staged delivery retry failed order=%s", row["id"])
+
+
 async def operations_watch_loop(app: Application):
     while True:
         try:
             trim_bot_log_if_needed()
+            await retry_staged_deliveries(app)
             await process_expiry_notifications(app.bot)
             await process_old_unpaid_orders(app.bot)
             await check_test_low_stock(app.bot)
@@ -378,7 +399,12 @@ async def send_protected_credential(
 
 
 async def send_config(context, uid: int, oid: int, plan_title: str, config: str) -> bool:
-    """Deliver one credential without exposing a partially-sent multi-message payload."""
+    """Stage one credential, deliver it, then atomically activate the service."""
+    try:
+        config = stage_delivery_config(oid, config)
+    except Exception:
+        log.exception("credential staging failed order=%s", oid)
+        return False
     try:
         await send_protected_credential(
             context.bot,
@@ -389,18 +415,63 @@ async def send_config(context, uid: int, oid: int, plan_title: str, config: str)
         )
     except TelegramError:
         log.exception("config payload delivery failed order=%s", oid)
+        attempts = 0
+        try:
+            with db() as c:
+                c.execute(
+                    "UPDATE orders SET delivery_attempts=COALESCE(delivery_attempts,0)+1,updated_at=? WHERE id=?",
+                    (now(), int(oid)),
+                )
+                row = c.execute("SELECT delivery_attempts FROM orders WHERE id=?", (int(oid),)).fetchone()
+                attempts = int(row["delivery_attempts"] or 0) if row else 0
+        except sqlite3.Error:
+            log.exception("failed to record delivery attempt order=%s", oid)
+        if attempts == 5:
+            try:
+                await context.bot.send_message(
+                    ADMIN_USER_ID,
+                    premium_html(
+                        f"⚠️ <b>تحویل خودکار سفارش #{oid} متوقف شد</b>\n\n"
+                        "پنج تلاش ارسال ناموفق بود. Credential همچنان به همین سفارش قفل است؛ "
+                        "بعد از بررسی کاربر/تلگرام، از پنل ادمین Retry دستی بزن."
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🧾 سفارش", callback_data=f"a:order:{oid}")
+                    ]]),
+                )
+            except TelegramError:
+                pass
         return False
 
-    # Security boundary: the secret was already delivered. Never re-release this
-    # inventory merely because persistence or a follow-up UI message fails.
-    try:
-        with db() as c:
-            c.execute(
-                "UPDATE orders SET delivered_config=?,updated_at=? WHERE id=?",
-                (config, now(), oid)
+    persisted = False
+    for attempt in range(3):
+        try:
+            persisted = finalize_service_delivery(oid, config, owner_uid=uid)
+            if persisted:
+                break
+        except sqlite3.Error:
+            log.exception("delivery persistence failed order=%s attempt=%s", oid, attempt + 1)
+            await asyncio.sleep(0.15 * (attempt + 1))
+        except Exception:
+            log.exception("unexpected delivery persistence failure order=%s", oid)
+            break
+
+    if not persisted:
+        # The secret already reached Telegram, so never release/reuse the same stock.
+        audit(ADMIN_USER_ID, "delivery_persistence_critical", f"order={oid}")
+        try:
+            await context.bot.send_message(
+                ADMIN_USER_ID,
+                premium_html(
+                    f"⚠️ <b>هشدار ثبت تحویل سفارش #{oid}</b>\n\n"
+                    "کانفیگ به کاربر ارسال شد اما ثبت نهایی دیتابیس ناموفق بود. "
+                    "این سفارش را دستی بررسی کن و همان کانفیگ را دوباره به موجودی برنگردان."
+                ),
+                parse_mode="HTML",
             )
-    except Exception:
-        log.exception("config delivered but DB persistence failed order=%s", oid)
+        except TelegramError:
+            pass
 
     try:
         await context.bot.send_message(
@@ -427,16 +498,18 @@ async def send_config(context, uid: int, oid: int, plan_title: str, config: str)
 
     return True
 
-def finalize_gift_order(oid: int, config: str) -> str:
-    """
-    Atomically persist gift credential + gift code + COMPLETED state.
-    Once this returns, stock must be committed even if Telegram notification fails.
+def finalize_gift_order(oid: int, config: Optional[str] = None) -> str:
+    """Finalize the *purchase* of a gift without starting service validity.
+
+    Inventory gifts may already carry a reserved credential. XUI gifts intentionally
+    carry no credential until the recipient redeems the code, so remote expiry starts
+    at redemption rather than at the buyer's payment time.
     """
     c = db()
     try:
         c.execute("BEGIN IMMEDIATE")
         o = c.execute(
-            "SELECT id,user_id,status,is_gift FROM orders WHERE id=?",
+            "SELECT id,user_id,status,is_gift,approved_at,purchased_at FROM orders WHERE id=?",
             (oid,)
         ).fetchone()
         if not o or not int(o["is_gift"] or 0):
@@ -446,7 +519,6 @@ def finalize_gift_order(oid: int, config: str) -> str:
             "SELECT code FROM gift_codes WHERE order_id=?",
             (oid,)
         ).fetchone()
-
         if existing:
             code = str(existing["code"])
         else:
@@ -454,36 +526,29 @@ def finalize_gift_order(oid: int, config: str) -> str:
             for _ in range(30):
                 candidate = "ZKG-" + secrets.token_hex(8).upper()
                 cur = c.execute(
-                    "INSERT OR IGNORE INTO gift_codes("
-                    "order_id,buyer_user_id,code,status,created_at"
-                    ") VALUES(?,?,?,'active',?)",
+                    "INSERT OR IGNORE INTO gift_codes(order_id,buyer_user_id,code,status,created_at) "
+                    "VALUES(?,?,?,'active',?)",
                     (oid, int(o["user_id"]), candidate, now())
                 )
                 if cur.rowcount == 1:
                     code = candidate
                     break
-
-                same = c.execute(
-                    "SELECT code FROM gift_codes WHERE order_id=?",
-                    (oid,)
-                ).fetchone()
+                same = c.execute("SELECT code FROM gift_codes WHERE order_id=?", (oid,)).fetchone()
                 if same:
                     code = str(same["code"])
                     break
-
             if not code:
                 raise RuntimeError("gift code generation failed")
 
         n = now()
         cur = c.execute(
-            "UPDATE orders SET delivered_config=?,status=?,"
-            "completed_at=COALESCE(completed_at,?),updated_at=? "
+            "UPDATE orders SET delivered_config=CASE WHEN ? IS NULL THEN delivered_config ELSE ? END,"
+            "status=?,purchased_at=COALESCE(purchased_at,approved_at,?),completed_at=COALESCE(completed_at,?),updated_at=? "
             "WHERE id=? AND status IN (?,?)",
-            (config, COMPLETED, n, n, oid, APPROVED, COMPLETED)
+            (config, config, COMPLETED, n, n, n, oid, APPROVED, COMPLETED)
         )
         if cur.rowcount != 1:
             raise RuntimeError("gift order state changed concurrently")
-
         c.commit()
         return code
     except Exception:
@@ -492,19 +557,16 @@ def finalize_gift_order(oid: int, config: str) -> str:
     finally:
         c.close()
 
-async def complete_gift_with_config(context, oid: int, config: str) -> bool:
+async def complete_gift_with_config(context, oid: int, config: Optional[str] = None) -> bool:
     o = get_order(oid)
     if not o:
         return False
-
-    # Critical phase: durable state first.
     try:
         code = finalize_gift_order(oid, config)
     except Exception:
         log.exception("gift critical finalization failed order=%s", oid)
         return False
 
-    # Notification is best-effort only.
     try:
         await context.bot.send_message(
             int(o["user_id"]),
@@ -513,7 +575,7 @@ async def complete_gift_with_config(context, oid: int, config: str) -> bool:
                 f"📦 {esc(o['plan_title'])}\n"
                 "این کد را برای دریافت‌کننده بفرست:\n"
                 f"<code>{esc(code)}</code>\n\n"
-                "دریافت‌کننده از بخش «🎁 دریافت هدیه» کد را وارد می‌کند.\n"
+                "اعتبار سرویس از زمان دریافت هدیه فعال می‌شود.\n"
                 "اگر این پیام پاک شد، کد هدیه داخل جزئیات سفارش شما هم باقی می‌ماند."
             ),
             parse_mode="HTML",
@@ -521,13 +583,9 @@ async def complete_gift_with_config(context, oid: int, config: str) -> bool:
             reply_markup=main_kb(int(o["user_id"]))
         )
     except TelegramError:
-        log.warning(
-            "gift finalized but notification failed order=%s; code remains recoverable",
-            oid
-        )
-
-    # DB state is already final; caller must commit reserved stock.
+        log.warning("gift finalized but notification failed order=%s; code remains recoverable", oid)
     return True
+
 
 def _xui_expiry_ms(o) -> int:
     exp = parse_db_dt(o["expires_at"])
@@ -536,8 +594,12 @@ def _xui_expiry_ms(o) -> int:
     return int(exp.timestamp() * 1000)
 
 
-def _xui_client_email(o) -> str:
-    return f"zk_{int(o['user_id'])}_{int(o['id'])}"
+def _xui_client_email(o, owner_uid: Optional[int] = None) -> str:
+    root_id = service_root_id(int(o["id"]))
+    if int(o["is_gift"] or 0):
+        return f"zk_gift_{root_id}"
+    owner = int(owner_uid or o["service_owner_user_id"] or o["user_id"])
+    return f"zk_{owner}_{root_id}"
 
 
 async def _xui_credential(xui: XUIClient, sub_id: str, email: str) -> str:
@@ -545,7 +607,8 @@ async def _xui_credential(xui: XUIClient, sub_id: str, email: str) -> str:
 
 
 async def sync_xui_order_status(oid: int):
-    svc = xui_service_for_order(oid)
+    root_id = service_root_id(int(oid))
+    svc = xui_service_for_order(root_id)
     if not svc:
         return None
     xui = XUIClient()
@@ -557,11 +620,11 @@ async def sync_xui_order_status(oid: int):
         with db() as c:
             c.execute(
                 "UPDATE xui_services SET last_error=?,last_sync_at=?,updated_at=? WHERE order_id=?",
-                (str(exc)[:500], now(), now(), oid)
+                (str(exc)[:500], now(), now(), root_id)
             )
         raise
     update_xui_service_sync(
-        oid,
+        root_id,
         total_bytes=status.total_bytes,
         expiry_ms=status.expiry_ms,
         ip_limit=status.limit_ip,
@@ -569,24 +632,128 @@ async def sync_xui_order_status(oid: int):
         enabled=status.enabled,
         last_error="",
     )
-    # Keep Zankode's local service expiry aligned with the remote source of truth.
     if status.expiry_ms > 0:
         try:
             remote_dt = datetime.fromtimestamp(status.expiry_ms / 1000, tz=timezone.utc).astimezone(IRAN_TZ)
             with db() as c:
-                c.execute("UPDATE orders SET expires_at=?,updated_at=? WHERE id=?", (db_dt(remote_dt), now(), oid))
+                c.execute(
+                    "UPDATE orders SET expires_at=?,expiry_warned_at=NULL,expired_notified_at=NULL,updated_at=? WHERE id=?",
+                    (db_dt(remote_dt), now(), root_id),
+                )
         except Exception:
-            log.exception("failed to align local XUI expiry order=%s", oid)
+            log.exception("failed to align local XUI expiry root_order=%s", root_id)
     return status
+
+
+async def _ensure_xui_for_order(xui: XUIClient, o, *, owner_uid: int):
+    """Create/recover/renew the one canonical remote client for an order."""
+    oid = int(o["id"])
+    root_id = service_root_id(oid)
+    _, target_expiry = prepare_service_activation(oid, owner_uid=owner_uid)
+    target_ms = int(target_expiry.timestamp() * 1000)
+    inbound_ids = order_xui_inbound_ids(o)
+    if not inbound_ids:
+        raise XUIError("Inbound ID برای این سفارش تعیین نشده است")
+    total_bytes = bytes_from_gb(order_xui_traffic_gb(o))
+    ip_limit = order_xui_ip_limit(o)
+    svc = xui_service_for_order(root_id)
+
+    if int(o["renew_parent_order_id"] or 0):
+        if not svc:
+            raise XUIError("سرویس اصلی 3X-UI برای تمدید پیدا نشد")
+        email = str(svc["client_email"])
+        if o["remote_applied_at"]:
+            status = await xui.status(email)
+            # If an admin manually shortened the client after payment but before
+            # delivery retry, restore the deterministic paid target.
+            if int(status.expiry_ms or 0) != target_ms or int(status.total_bytes or 0) != total_bytes or int(status.limit_ip or 0) != ip_limit:
+                status = await xui.renew_client(
+                    email,
+                    target_expiry_ms=target_ms,
+                    total_bytes=total_bytes,
+                    limit_ip=ip_limit,
+                    reset_traffic=False,
+                    tg_id=owner_uid,
+                    comment=f"Zankode renewal #{oid}",
+                )
+        else:
+            # Reconcile before mutating. If the previous process crashed after the
+            # remote renewal but before writing remote_applied_at, the exact paid
+            # target already proves the renewal reached 3X-UI. In that case we
+            # recover state without resetting traffic a second time.
+            current = await xui.status(email)
+            already_applied = (
+                int(current.expiry_ms or 0) == target_ms
+                and int(current.total_bytes or 0) == total_bytes
+                and int(current.limit_ip or 0) == ip_limit
+            )
+            if already_applied:
+                status = current
+            else:
+                status = await xui.renew_client(
+                    email,
+                    target_expiry_ms=target_ms,
+                    total_bytes=total_bytes,
+                    limit_ip=ip_limit,
+                    reset_traffic=True,
+                    tg_id=owner_uid,
+                    comment=f"Zankode renewal #{oid}",
+                )
+            stamp = now()
+            with db() as c:
+                c.execute("UPDATE orders SET remote_applied_at=?,updated_at=? WHERE id=?", (stamp, stamp, oid))
+        sub_id = status.sub_id or str(svc["sub_id"] or "")
+        inbound_ids = status.inbound_ids or parse_inbound_ids(str(svc["inbound_ids"] or "")) or inbound_ids
+        upsert_xui_service(
+            root_id, owner_uid, int(o["plan_id"]) if o["plan_id"] else None, email,
+            str(svc["client_uuid"] or ""), sub_id, inbound_ids,
+            status.total_bytes, status.expiry_ms, status.limit_ip,
+            remote_status="active" if status.enabled else "disabled",
+            used_bytes=status.used_bytes,
+        )
+        return email, sub_id
+
+    email = str(svc["client_email"]) if svc else _xui_client_email(o, owner_uid)
+    if svc and o["remote_applied_at"]:
+        status = await xui.status(email)
+        sub_id = status.sub_id or str(svc["sub_id"] or "")
+        upsert_xui_service(
+            root_id, owner_uid, int(o["plan_id"]) if o["plan_id"] else None, email,
+            str(svc["client_uuid"] or ""), sub_id, status.inbound_ids or inbound_ids,
+            status.total_bytes, status.expiry_ms, status.limit_ip,
+            remote_status="active" if status.enabled else "disabled", used_bytes=status.used_bytes,
+        )
+        return email, sub_id
+
+    provisioned = await xui.create_client(
+        email=email,
+        inbound_ids=inbound_ids,
+        total_bytes=total_bytes,
+        expiry_ms=target_ms,
+        limit_ip=ip_limit,
+        tg_id=owner_uid,
+        comment=f"Zankode VPN service #{root_id} | order #{oid} | {o['plan_title']}",
+        flow=os.getenv("XUI_DEFAULT_FLOW", "").strip(),
+    )
+    upsert_xui_service(
+        root_id, owner_uid, int(o["plan_id"]) if o["plan_id"] else None, provisioned.email,
+        provisioned.uuid, provisioned.sub_id, provisioned.inbound_ids,
+        provisioned.total_bytes, provisioned.expiry_ms, provisioned.limit_ip,
+    )
+    with db() as c:
+        c.execute("UPDATE orders SET remote_applied_at=?,updated_at=? WHERE id=?", (now(), now(), oid))
+    return provisioned.email, provisioned.sub_id
 
 
 async def provision_xui_order(context, oid: int, actor: str = "system") -> bool:
     o = get_order(oid)
-    if not o or o["status"] != APPROVED or not o["plan_id"]:
+    if not o or o["status"] != APPROVED or not order_is_xui(o):
         return False
-    plan = get_plan(int(o["plan_id"]))
-    if not plan or not plan_is_xui(plan):
-        return False
+
+    # Gift purchase creates only a voucher. The remote client is created when the
+    # recipient redeems it so service validity starts at the correct moment.
+    if int(o["is_gift"] or 0):
+        return await complete_gift_with_config(context, oid, None)
 
     xui = XUIClient()
     if not xui.configured:
@@ -596,7 +763,7 @@ async def provision_xui_order(context, oid: int, actor: str = "system") -> bool:
                 ADMIN_USER_ID,
                 premium_html(
                     f"⚠️ <b>سفارش XUI #{oid} آماده ساخت است اما اتصال 3X-UI تنظیم نشده.</b>\n\n"
-                    "XUI_PANEL_URL و XUI_API_TOKEN را در .env تنظیم کن. برای Subscription URL هم XUI_SUB_URL_TEMPLATE اختیاری است."
+                    "XUI_PANEL_URL و XUI_API_TOKEN را در .env تنظیم کن. Subscription URL اختیاری است."
                 ),
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧾 سفارش", callback_data=f"a:order:{oid}")]])
@@ -605,91 +772,28 @@ async def provision_xui_order(context, oid: int, actor: str = "system") -> bool:
             pass
         return False
 
-    svc = xui_service_for_order(oid)
-    parent_svc = xui_parent_service(oid)
     try:
-        if svc:
-            # Remote provisioning already happened in an earlier attempt. Never create a duplicate.
-            email = str(svc["client_email"])
-            sub_id = str(svc["sub_id"] or "")
-            credential = await _xui_credential(xui, sub_id, email)
-        elif parent_svc:
-            email = str(parent_svc["client_email"])
-            status = await xui.renew_client(
-                email,
-                duration_days=max(1, int(plan["duration_days"] or 30)),
-                total_bytes=bytes_from_gb(int(plan["xui_traffic_gb"] or 0)),
-                limit_ip=max(0, int(plan["xui_ip_limit"] or 0)),
-                reset_traffic=True,
-            )
-            sub_id = status.sub_id or str(parent_svc["sub_id"] or "")
-            inbound_ids = status.inbound_ids or parse_inbound_ids(str(parent_svc["inbound_ids"] or ""))
-            upsert_xui_service(
-                oid, int(o["user_id"]), int(o["plan_id"]), email,
-                str(parent_svc["client_uuid"] or ""), sub_id, inbound_ids,
-                status.total_bytes, status.expiry_ms, status.limit_ip,
-                remote_status="active" if status.enabled else "disabled",
-                used_bytes=status.used_bytes,
-            )
-            credential = await _xui_credential(xui, sub_id, email)
-            # Align renewal order expiry with remote 3X-UI.
-            if status.expiry_ms > 0:
-                remote_dt = datetime.fromtimestamp(status.expiry_ms / 1000, tz=timezone.utc).astimezone(IRAN_TZ)
-                with db() as c:
-                    c.execute("UPDATE orders SET expires_at=?,updated_at=? WHERE id=?", (db_dt(remote_dt), now(), oid))
-        else:
-            inbound_ids = parse_inbound_ids(str(plan["xui_inbound_ids"] or ""))
-            if not inbound_ids:
-                raise XUIError("Inbound ID برای این پلن تعیین نشده است")
-            provisioned = await xui.create_client(
-                email=_xui_client_email(o),
-                inbound_ids=inbound_ids,
-                total_bytes=bytes_from_gb(int(plan["xui_traffic_gb"] or 0)),
-                expiry_ms=_xui_expiry_ms(o),
-                limit_ip=max(0, int(plan["xui_ip_limit"] or 0)),
-                tg_id=int(o["user_id"]),
-                comment=f"Zankode VPN order #{oid} | {o['plan_title']}",
-                flow=os.getenv("XUI_DEFAULT_FLOW", "").strip(),
-            )
-            email, sub_id = provisioned.email, provisioned.sub_id
-            try:
-                upsert_xui_service(
-                    oid, int(o["user_id"]), int(o["plan_id"]), email,
-                    provisioned.uuid, sub_id, provisioned.inbound_ids,
-                    provisioned.total_bytes, provisioned.expiry_ms, provisioned.limit_ip,
-                )
-            except Exception:
-                # Avoid leaving an untracked paid client in the remote panel.
-                try:
-                    await xui.delete_client(email)
-                except Exception:
-                    log.exception("XUI compensation delete failed order=%s client=%s", oid, email)
-                raise
-            credential = await _xui_credential(xui, sub_id, email)
-
-        if int(o["is_gift"] or 0):
-            delivered = await complete_gift_with_config(context, oid, credential)
-        else:
-            delivered = await send_config(context, int(o["user_id"]), oid, o["plan_title"], credential)
-            if delivered:
-                update_status(oid, COMPLETED, completed=True)
-
+        owner_uid = int(o["service_owner_user_id"] or o["user_id"])
+        email, sub_id = await _ensure_xui_for_order(xui, o, owner_uid=owner_uid)
+        credential = await _xui_credential(xui, sub_id, email)
+        delivered = await send_config(context, owner_uid, oid, o["plan_title"], credential)
         if not delivered:
             return False
-
         audit(
             ADMIN_USER_ID if actor == "admin" else int(o["user_id"]),
             "xui_auto_deliver",
-            f"order={oid};client={email};actor={actor}",
+            f"order={oid};root={service_root_id(oid)};client={email};actor={actor}",
         )
-        await notify_referral_qualified(context, int(o["user_id"]), oid)
+        if get_order(oid) and get_order(oid)["status"] == COMPLETED:
+            await notify_referral_qualified(context, int(o["user_id"]), oid)
         return True
     except XUIError as exc:
         log.warning("XUI provision failed order=%s: %s", oid, exc)
+        root_id = service_root_id(oid)
         with db() as c:
             c.execute(
                 "UPDATE xui_services SET last_error=?,updated_at=? WHERE order_id=?",
-                (str(exc)[:500], now(), oid)
+                (str(exc)[:500], now(), root_id)
             )
         audit(ADMIN_USER_ID, "xui_provision_failed", f"order={oid};error={str(exc)[:200]}")
         try:
@@ -714,8 +818,64 @@ async def provision_xui_order(context, oid: int, actor: str = "system") -> bool:
         return False
 
 
+async def redeem_gift_service(context, gift_row, recipient_uid: int) -> bool:
+    """Activate a reserved gift for its recipient with crash-safe ownership."""
+    gid = int(gift_row["id"])
+    oid = int(gift_row["order_id"])
+    o = get_order(oid)
+    if not o or o["status"] != COMPLETED or not int(o["is_gift"] or 0):
+        return False
+
+    credential = str(o["delivered_config"] or "")
+    try:
+        if order_is_xui(o):
+            xui = XUIClient()
+            if not xui.configured:
+                raise XUIError("اتصال 3X-UI برای فعال‌سازی هدیه تنظیم نشده است")
+            email, sub_id = await _ensure_xui_for_order(xui, o, owner_uid=int(recipient_uid))
+            credential = await _xui_credential(xui, sub_id, email)
+        if not credential:
+            raise RuntimeError("credential for gift is not available")
+
+        # Durable ownership first. If Telegram fails after this point, the recipient
+        # can reopen My Services and retrieve the credential without losing the gift.
+        finalize_service_delivery(oid, credential, owner_uid=int(recipient_uid))
+        finish_gift_redeem(gid, True)
+        audit(recipient_uid, "gift_redeem", f"gift={gid};order={oid}")
+
+        try:
+            await send_protected_credential(
+                context.bot,
+                int(recipient_uid),
+                "🎉 <b>هدیه شما فعال شد</b>\n" f"📦 {esc(o['plan_title'])}",
+                credential,
+                f"zankode_gift_{gid}.txt",
+                reply_markup=main_kb(int(recipient_uid)),
+            )
+        except TelegramError:
+            log.warning("gift activated but Telegram delivery failed gift=%s user=%s", gid, recipient_uid)
+        try:
+            await context.bot.send_message(
+                int(gift_row["buyer_user_id"]),
+                f"🎁 هدیه سفارش #{oid} توسط کاربر <code>{int(recipient_uid)}</code> فعال شد.",
+                parse_mode="HTML"
+            )
+        except TelegramError:
+            pass
+        return True
+    except Exception as exc:
+        log.exception("gift activation failed gift=%s order=%s", gid, oid)
+        audit(recipient_uid, "gift_redeem_failed", f"gift={gid};order={oid};error={str(exc)[:180]}")
+        # Keep `redeeming` for XUI partial failures so only the same recipient can
+        # resume the deterministic remote operation with the same gift code.
+        if not order_is_xui(o):
+            finish_gift_redeem(gid, False)
+        return False
+
+
 async def delete_xui_service(oid: int) -> bool:
-    svc = xui_service_for_order(oid)
+    root_id = service_root_id(int(oid))
+    svc = xui_service_for_order(root_id)
     if not svc:
         return False
     xui = XUIClient()
@@ -725,9 +885,9 @@ async def delete_xui_service(oid: int) -> bool:
     with db() as c:
         c.execute(
             "UPDATE xui_services SET remote_status='deleted',last_sync_at=?,last_error='',updated_at=? WHERE order_id=?",
-            (now(), now(), oid)
+            (now(), now(), root_id)
         )
-    audit(ADMIN_USER_ID, "xui_client_delete", f"order={oid};client={svc['client_email']}")
+    audit(ADMIN_USER_ID, "xui_client_delete", f"order={oid};root={root_id};client={svc['client_email']}")
     return True
 
 
@@ -736,10 +896,20 @@ async def fulfill_approved_order(context, oid: int, actor: str = "system") -> bo
     if not o or o["status"] != APPROVED:
         return False
 
-    if o["plan_id"]:
-        plan = get_plan(int(o["plan_id"]))
-        if plan_is_xui(plan):
-            return await provision_xui_order(context, oid, actor=actor)
+    # Crash/retry path: once a credential is staged it is the only credential that
+    # may ever be delivered for this order, regardless of later stock/plan changes.
+    if o["delivered_config"] and not int(o["is_gift"] or 0):
+        delivered = await send_config(context, int(o["service_owner_user_id"] or o["user_id"]), oid, o["plan_title"], str(o["delivered_config"]))
+        if delivered:
+            commit_stock_for_order(oid)
+            await notify_referral_qualified(context, int(o["user_id"]), oid)
+        return delivered
+
+    if order_is_xui(o):
+        delivered = await provision_xui_order(context, oid, actor=actor)
+        if delivered and int(o["is_gift"] or 0):
+            await notify_referral_qualified(context, int(o["user_id"]), oid)
+        return delivered
 
     if setting_on("auto_delivery") and o["plan_id"]:
         cfg = pop_stock(int(o["plan_id"]), oid)
@@ -748,8 +918,6 @@ async def fulfill_approved_order(context, oid: int, actor: str = "system") -> bo
                 delivered = await complete_gift_with_config(context, oid, cfg)
             else:
                 delivered = await send_config(context, int(o["user_id"]), oid, o["plan_title"], cfg)
-                if delivered:
-                    update_status(oid, COMPLETED, completed=True)
             if delivered:
                 commit_stock_for_order(oid)
                 audit(ADMIN_USER_ID if actor == "admin" else int(o["user_id"]), "auto_deliver", f"order={oid};actor={actor}")

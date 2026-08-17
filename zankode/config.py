@@ -14,9 +14,7 @@ import secrets
 import sqlite3
 import tempfile
 import time
-import httpx
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import quote
@@ -134,7 +132,6 @@ ORDER_CREATE_COOLDOWN = 4.0
 MAX_OPEN_ORDERS_PER_USER = 3
 TEST_REFERRAL_MATURITY_HOURS = 1
 RESERVATION_STALE_MINUTES = 20
-TIME_IR_CACHE_SECONDS = 60
 
 # ======================== Referral configuration ========================
 # Legacy milestone settings are kept for backward database compatibility.
@@ -147,7 +144,6 @@ TEST_REFERRAL_TARGET = 2
 TEST_TRAFFIC_LABEL = "50MB"
 
 IRAN_TZ = ZoneInfo("Asia/Tehran")
-TIME_IR_URL = "https://www.time.ir/today"
 EXPIRY_WARNING_DAYS = 3
 OPERATIONS_CHECK_SECONDS = 15 * 60
 
@@ -395,9 +391,14 @@ class _SecretRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             msg = record.getMessage()
-            token = str(BOT_TOKEN or "").strip()
-            if token:
-                msg = msg.replace(token, "<BOT_TOKEN_REDACTED>")
+            secrets_to_redact = {
+                "BOT_TOKEN": str(BOT_TOKEN or "").strip(),
+                "XUI_API_TOKEN": os.getenv("XUI_API_TOKEN", "").strip(),
+                "XUI_PASSWORD": os.getenv("XUI_PASSWORD", "").strip(),
+            }
+            for label, secret in secrets_to_redact.items():
+                if secret:
+                    msg = msg.replace(secret, f"<{label}_REDACTED>")
             msg = self._BOT_URL_RE.sub(r"\1<BOT_TOKEN_REDACTED>", msg)
             record.msg = msg
             record.args = ()

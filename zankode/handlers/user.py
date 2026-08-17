@@ -286,7 +286,7 @@ async def user_callback(q, context, data: str):
         active_n = 0
         for o in services:
             exp = parse_db_dt(o["expires_at"])
-            active = bool(exp and exp > iran_now())
+            active = bool(exp and exp > iran_now() and service_state(o) == "فعال ✅")
             active_n += int(active)
             tail = f"تا {jalali_date(exp)}" if exp else "تحویل‌شده"
             rows.append([
@@ -299,7 +299,8 @@ async def user_callback(q, context, data: str):
             ])
         for g in gifts:
             exp = parse_db_dt(g["expires_at"])
-            active = bool(exp and exp > iran_now())
+            remote_ok = str(g["xui_remote_status"] or "active") == "active"
+            active = bool(exp and exp > iran_now() and remote_ok)
             active_n += int(active)
             tail = f"تا {jalali_date(exp)}" if exp else "هدیه"
             rows.append([
@@ -326,10 +327,14 @@ async def user_callback(q, context, data: str):
         if not g:
             await answer(q, "هدیه پیدا نشد.", True)
             return
-        gift_kb = InlineKeyboardMarkup([
+        gift_rows = []
+        if xui_service_for_order(int(g["order_id"])):
+            gift_rows.append([user_button("🔄 وضعیت لحظه‌ای سرویس", callback_data=f"u:xui:{g['order_id']}", style="primary")])
+        gift_rows += [
             [user_button("🛒 خرید سرویس", callback_data="u:plans", style="success")],
             [user_button("↩️ سرویس‌های من", callback_data="u:services", style="danger")],
-        ])
+        ]
+        gift_kb = InlineKeyboardMarkup(gift_rows)
         gift_config = str(g["delivered_config"] or "")
         if len(gift_config) > 1800:
             try:
@@ -592,9 +597,12 @@ async def user_callback(q, context, data: str):
             row = c.execute("SELECT wallet_balance FROM users WHERE user_id=?", (uid,)).fetchone()
             if row and int(row["wallet_balance"] or 0) >= amount:
                 new_bal = int(row["wallet_balance"] or 0) - amount
+                paid_at = now()
                 cur = c.execute(
-                    "UPDATE orders SET status=?,approved_at=?,updated_at=? WHERE id=? AND user_id=? AND status=?",
-                    (APPROVED, now(), now(), oid, uid, AWAIT_RECEIPT)
+                    "UPDATE orders SET status=?,approved_at=?,purchased_at=COALESCE(purchased_at,?),"
+                    "time_source=COALESCE(time_source,'server-tehran'),updated_at=? "
+                    "WHERE id=? AND user_id=? AND status=?",
+                    (APPROVED, paid_at, paid_at, paid_at, oid, uid, AWAIT_RECEIPT)
                 )
                 if cur.rowcount == 1:
                     c.execute("UPDATE users SET wallet_balance=? WHERE user_id=?", (new_bal, uid))
@@ -675,9 +683,12 @@ async def user_callback(q, context, data: str):
                 c.rollback()
                 await answer(q, "موجودی کیف پول کافی نیست.", True)
                 return
+            paid_at = now()
             cur = c.execute(
-                "UPDATE orders SET status=?,approved_at=?,updated_at=? WHERE id=? AND user_id=? AND status=?",
-                (APPROVED, now(), now(), oid, uid, AWAIT_RECEIPT)
+                "UPDATE orders SET status=?,approved_at=?,purchased_at=COALESCE(purchased_at,?),"
+                "time_source=COALESCE(time_source,'server-tehran'),updated_at=? "
+                "WHERE id=? AND user_id=? AND status=?",
+                (APPROVED, paid_at, paid_at, paid_at, oid, uid, AWAIT_RECEIPT)
             )
             if cur.rowcount != 1:
                 c.rollback(); await answer(q, "وضعیت سفارش تغییر کرده.", True); return
@@ -764,7 +775,8 @@ async def user_callback(q, context, data: str):
         oid = to_int(data.rsplit(":", 1)[1])
         o = get_order(oid) if oid is not None else None
         svc = xui_service_for_order(oid) if oid is not None else None
-        if not o or int(o["user_id"]) != uid or not svc:
+        owner_uid = int(o["service_owner_user_id"] or o["user_id"]) if o else 0
+        if not o or owner_uid != uid or not svc:
             await answer(q, "سرویس 3X-UI پیدا نشد.", True)
             return
         try:
@@ -790,6 +802,14 @@ async def user_callback(q, context, data: str):
         total = human_bytes(st.total_bytes) if st.total_bytes > 0 else "نامحدود"
         remaining = human_bytes(st.remaining_bytes) if st.remaining_bytes >= 0 else "نامحدود"
         online = "آنلاین 🟢" if st.online is True else ("آفلاین ⚪" if st.online is False else "نامشخص")
+        live_rows = [[user_button("🔄 بروزرسانی", callback_data=f"u:xui:{oid}", style="primary")]]
+        if int(o["is_gift"] or 0):
+            gift = gift_for_order(int(o["id"]))
+            back_cb = f"u:giftservice:{gift['id']}" if gift else "u:services"
+            live_rows.append([user_button("↩️ سرویس هدیه", callback_data=back_cb, style="danger")])
+        else:
+            live_rows.append([user_button("🔄 تمدید سرویس", callback_data=f"u:renew:{oid}", style="success")])
+            live_rows.append([user_button("↩️ سفارش", callback_data=f"u:order:{oid}", style="danger")])
         await edit(
             q,
             "🔌 <b>وضعیت لحظه‌ای سرویس</b>\n\n"
@@ -800,11 +820,7 @@ async def user_callback(q, context, data: str):
             f"📥 باقی‌مانده: <b>{remaining}</b>\n"
             f"📱 IP Limit: <b>{st.limit_ip}</b>\n"
             f"📅 انقضا: <b>{expiry}</b>",
-            InlineKeyboardMarkup([
-                [user_button("🔄 بروزرسانی", callback_data=f"u:xui:{oid}", style="primary")],
-                [user_button("🔄 تمدید سرویس", callback_data=f"u:renew:{oid}", style="success")],
-                [user_button("↩️ سفارش", callback_data=f"u:order:{oid}", style="danger")],
-            ])
+            InlineKeyboardMarkup(live_rows)
         )
         return
 

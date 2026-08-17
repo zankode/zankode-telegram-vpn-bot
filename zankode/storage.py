@@ -110,15 +110,25 @@ def init_db():
             completed_at TEXT,
             duration_days INTEGER NOT NULL DEFAULT 30,
             purchased_at TEXT,
+            service_activated_at TEXT,
             expires_at TEXT,
             time_source TEXT,
             renew_parent_order_id INTEGER,
+            service_root_order_id INTEGER,
+            service_owner_user_id INTEGER,
+            provision_mode_snapshot TEXT NOT NULL DEFAULT 'inventory',
+            xui_inbound_ids_snapshot TEXT NOT NULL DEFAULT '',
+            xui_traffic_gb_snapshot INTEGER NOT NULL DEFAULT 0,
+            xui_ip_limit_snapshot INTEGER NOT NULL DEFAULT 1,
+            remote_applied_at TEXT,
             expiry_warned_at TEXT,
             expired_notified_at TEXT,
             receipt_unique_id TEXT,
             delivered_config TEXT,
+            delivery_attempts INTEGER NOT NULL DEFAULT 0,
             is_gift INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
+            FOREIGN KEY(user_id) REFERENCES users(user_id),
+            FOREIGN KEY(service_owner_user_id) REFERENCES users(user_id)
         );
         CREATE TABLE IF NOT EXISTS tickets(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -289,18 +299,29 @@ def init_db():
         ensure_column(c, "plans", "xui_ip_limit", "INTEGER NOT NULL DEFAULT 1")
         ensure_column(c, "orders", "duration_days", "INTEGER NOT NULL DEFAULT 30")
         ensure_column(c, "orders", "purchased_at", "TEXT")
+        ensure_column(c, "orders", "service_activated_at", "TEXT")
         ensure_column(c, "orders", "expires_at", "TEXT")
         ensure_column(c, "orders", "time_source", "TEXT")
         ensure_column(c, "orders", "renew_parent_order_id", "INTEGER")
+        ensure_column(c, "orders", "service_root_order_id", "INTEGER")
+        ensure_column(c, "orders", "service_owner_user_id", "INTEGER")
+        ensure_column(c, "orders", "provision_mode_snapshot", "TEXT NOT NULL DEFAULT 'inventory'")
+        ensure_column(c, "orders", "xui_inbound_ids_snapshot", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(c, "orders", "xui_traffic_gb_snapshot", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(c, "orders", "xui_ip_limit_snapshot", "INTEGER NOT NULL DEFAULT 1")
+        ensure_column(c, "orders", "remote_applied_at", "TEXT")
         ensure_column(c, "orders", "expiry_warned_at", "TEXT")
         ensure_column(c, "orders", "expired_notified_at", "TEXT")
         ensure_column(c, "orders", "receipt_unique_id", "TEXT")
         ensure_column(c, "orders", "delivered_config", "TEXT")
+        ensure_column(c, "orders", "delivery_attempts", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(c, "users", "test_review_required", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(c, "users", "test_review_reason", "TEXT")
         ensure_column(c, "users", "wallet_balance", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(c, "orders", "is_gift", "INTEGER NOT NULL DEFAULT 0")
         c.execute("CREATE INDEX IF NOT EXISTS idx_orders_expiry ON orders(status,expires_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_orders_service_root ON orders(service_root_order_id,status)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_orders_service_owner ON orders(service_owner_user_id,status,expires_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_wallet_tx_user ON wallet_transactions(user_id,created_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_wallet_topup_status ON wallet_topups(status,created_at)")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_wallet_topup_receipt ON wallet_topups(receipt_unique_id) WHERE receipt_unique_id IS NOT NULL")
@@ -373,6 +394,117 @@ def init_db():
             "WHERE duration_days IS NULL OR duration_days<=0"
         )
 
+        # v2.2.1 snapshots the technical plan settings at order creation.  Existing
+        # orders are backfilled exactly once so future plan edits never change an
+        # already-paid order's provisioning contract.
+        snapshot_migrated = c.execute(
+            "SELECT value FROM settings WHERE key='migration_v221_order_snapshots'"
+        ).fetchone()
+        if not snapshot_migrated:
+            c.execute(
+                "UPDATE orders SET "
+                "provision_mode_snapshot=COALESCE((SELECT provision_mode FROM plans WHERE plans.id=orders.plan_id),'inventory'),"
+                "xui_inbound_ids_snapshot=COALESCE((SELECT xui_inbound_ids FROM plans WHERE plans.id=orders.plan_id),''),"
+                "xui_traffic_gb_snapshot=COALESCE((SELECT xui_traffic_gb FROM plans WHERE plans.id=orders.plan_id),0),"
+                "xui_ip_limit_snapshot=COALESCE((SELECT xui_ip_limit FROM plans WHERE plans.id=orders.plan_id),1)"
+            )
+            c.execute(
+                "INSERT OR REPLACE INTO settings(key,value) VALUES('migration_v221_order_snapshots','1')"
+            )
+
+        # Build a stable root for every service.  Renewal orders remain financial
+        # transactions, while the root order is the single canonical service row.
+        root_by_id: dict[int, int] = {}
+        order_rows = c.execute(
+            "SELECT id,user_id,renew_parent_order_id,is_gift,provision_mode_snapshot FROM orders ORDER BY id"
+        ).fetchall()
+        for row in order_rows:
+            oid = int(row["id"])
+            parent = int(row["renew_parent_order_id"]) if row["renew_parent_order_id"] else 0
+            mode = str(row["provision_mode_snapshot"] or "inventory").lower()
+            # Only remotely managed XUI renewals are the same underlying service.
+            # Inventory renewal delivers a new credential and therefore gets a new root.
+            root = root_by_id.get(parent, parent) if (parent and mode == "xui") else oid
+            if root <= 0:
+                root = oid
+            root_by_id[oid] = root
+            owner = None if int(row["is_gift"] or 0) and not parent else int(row["user_id"])
+            c.execute(
+                "UPDATE orders SET service_root_order_id=?,"
+                "service_owner_user_id=COALESCE(service_owner_user_id,?) WHERE id=?",
+                (root, owner, oid),
+            )
+
+        # Redeemed gifts belong operationally to the recipient even though the
+        # original purchase transaction remains attached to the buyer.
+        c.execute(
+            "UPDATE orders SET service_owner_user_id=("
+            "SELECT recipient_user_id FROM gift_codes g WHERE g.order_id=orders.id AND g.status='redeemed'"
+            ") WHERE is_gift=1 AND EXISTS("
+            "SELECT 1 FROM gift_codes g WHERE g.order_id=orders.id AND g.status='redeemed' AND g.recipient_user_id IS NOT NULL"
+            ")"
+        )
+
+        # Legacy completed rows used purchased_at as both payment and activation
+        # time. Preserve that history while new orders use service_activated_at.
+        c.execute(
+            "UPDATE orders SET service_activated_at=purchased_at "
+            "WHERE status=? AND service_activated_at IS NULL AND purchased_at IS NOT NULL AND expires_at IS NOT NULL",
+            (COMPLETED,),
+        )
+
+        # A renewal extends the canonical root service.  Bring old databases into
+        # that model by promoting the furthest completed expiry to the root row.
+        roots = c.execute(
+            "SELECT service_root_order_id root_id,MAX(expires_at) max_exp "
+            "FROM orders WHERE status=? AND service_root_order_id IS NOT NULL AND expires_at IS NOT NULL "
+            "GROUP BY service_root_order_id",
+            (COMPLETED,),
+        ).fetchall()
+        for item in roots:
+            c.execute(
+                "UPDATE orders SET expires_at=?,expiry_warned_at=NULL,expired_notified_at=NULL "
+                "WHERE id=? AND (expires_at IS NULL OR expires_at<?)",
+                (item["max_exp"], int(item["root_id"]), item["max_exp"]),
+            )
+
+        # Collapse legacy per-renewal XUI rows into one row per canonical service.
+        # Older v2.2.0 builds recorded the same remote client once for every renewal.
+        xrows = c.execute(
+            "SELECT xs.*,COALESCE(o.service_root_order_id,o.id) root_id,"
+            "COALESCE(o.service_owner_user_id,o.user_id) owner_id "
+            "FROM xui_services xs JOIN orders o ON o.id=xs.order_id ORDER BY xs.updated_at,xs.order_id"
+        ).fetchall()
+        grouped: dict[int, list[sqlite3.Row]] = {}
+        for row in xrows:
+            grouped.setdefault(int(row["root_id"]), []).append(row)
+        for root_id, items in grouped.items():
+            latest = items[-1]
+            if int(latest["order_id"]) != root_id:
+                c.execute(
+                    "INSERT INTO xui_services(order_id,user_id,plan_id,client_email,client_uuid,sub_id,inbound_ids,total_bytes,"
+                    "expiry_ms,ip_limit,remote_status,last_used_bytes,last_sync_at,last_error,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(order_id) DO UPDATE SET user_id=excluded.user_id,plan_id=excluded.plan_id,"
+                    "client_email=excluded.client_email,client_uuid=excluded.client_uuid,sub_id=excluded.sub_id,"
+                    "inbound_ids=excluded.inbound_ids,total_bytes=excluded.total_bytes,expiry_ms=excluded.expiry_ms,"
+                    "ip_limit=excluded.ip_limit,remote_status=excluded.remote_status,last_used_bytes=excluded.last_used_bytes,"
+                    "last_sync_at=excluded.last_sync_at,last_error=excluded.last_error,updated_at=excluded.updated_at",
+                    (root_id,int(latest["owner_id"]),latest["plan_id"],latest["client_email"],latest["client_uuid"],
+                     latest["sub_id"],latest["inbound_ids"],latest["total_bytes"],latest["expiry_ms"],latest["ip_limit"],
+                     latest["remote_status"],latest["last_used_bytes"],latest["last_sync_at"],latest["last_error"],
+                     latest["created_at"],latest["updated_at"]),
+                )
+            else:
+                c.execute(
+                    "UPDATE xui_services SET user_id=? WHERE order_id=?",
+                    (int(latest["owner_id"]), root_id),
+                )
+            c.execute(
+                "DELETE FROM xui_services WHERE order_id IN (" + ",".join("?" for _ in items) + ") AND order_id<>?",
+                tuple(int(x["order_id"]) for x in items) + (root_id,),
+            )
+
         # Recover configs for legacy orders that were fulfilled from automatic inventory.
         c.execute(
             "UPDATE orders SET delivered_config=("
@@ -384,17 +516,22 @@ def init_db():
             ")"
         )
 
+        # Only completed legacy rows need purchase timestamps backfilled.  Pending
+        # orders must never start consuming service time before activation.
         old_rows = c.execute(
-            "SELECT id,created_at,duration_days FROM orders WHERE purchased_at IS NULL"
+            "SELECT id,created_at,duration_days,expires_at FROM orders "
+            "WHERE purchased_at IS NULL AND status=?",
+            (COMPLETED,),
         ).fetchall()
         for row in old_rows:
             pdt = parse_db_dt(row["created_at"])
             if not pdt:
                 continue
-            exp = pdt + timedelta(days=max(1, int(row["duration_days"] or 30)))
+            exp = parse_db_dt(row["expires_at"]) or (pdt + timedelta(days=max(1, int(row["duration_days"] or 30))))
             c.execute(
-                "UPDATE orders SET purchased_at=?,expires_at=?,time_source=? WHERE id=?",
-                (db_dt(pdt), db_dt(exp), "legacy", row["id"])
+                "UPDATE orders SET purchased_at=?,service_activated_at=COALESCE(service_activated_at,?),"
+                "expires_at=COALESCE(expires_at,?),time_source=COALESCE(time_source,?) WHERE id=?",
+                (db_dt(pdt), db_dt(pdt), db_dt(exp), "legacy", row["id"])
             )
 
     try:
@@ -777,15 +914,28 @@ def gift_for_order(oid: int):
         return c.execute("SELECT * FROM gift_codes WHERE order_id=?", (oid,)).fetchone()
 
 def reserve_gift_redeem(uid: int, code: str):
+    """Atomically reserve a gift for one recipient, allowing same-user crash resume."""
     c = db()
     try:
         c.execute("BEGIN IMMEDIATE")
         g = c.execute(
-            "SELECT g.*,o.delivered_config,o.plan_title,o.status order_status "
+            "SELECT g.*,o.delivered_config,o.plan_title,o.status order_status,o.provision_mode_snapshot,"
+            "o.xui_inbound_ids_snapshot,o.xui_traffic_gb_snapshot,o.xui_ip_limit_snapshot,o.duration_days "
             "FROM gift_codes g JOIN orders o ON o.id=g.order_id "
             "WHERE g.code=? COLLATE NOCASE", (code.strip(),)
         ).fetchone()
-        if not g or g["status"] != "active" or g["order_status"] != COMPLETED or not g["delivered_config"]:
+        if not g or g["order_status"] != COMPLETED:
+            c.rollback()
+            return None
+        is_xui = str(g["provision_mode_snapshot"] or "inventory").lower() == "xui"
+        if not is_xui and not g["delivered_config"]:
+            c.rollback()
+            return None
+        status = str(g["status"] or "")
+        if status == "redeeming" and int(g["recipient_user_id"] or 0) == int(uid):
+            c.commit()
+            return g
+        if status != "active":
             c.rollback()
             return None
         cur = c.execute(
@@ -796,7 +946,12 @@ def reserve_gift_redeem(uid: int, code: str):
             c.rollback()
             return None
         c.commit()
-        return g
+        return c.execute(
+            "SELECT g.*,o.delivered_config,o.plan_title,o.status order_status,o.provision_mode_snapshot,"
+            "o.xui_inbound_ids_snapshot,o.xui_traffic_gb_snapshot,o.xui_ip_limit_snapshot,o.duration_days "
+            "FROM gift_codes g JOIN orders o ON o.id=g.order_id WHERE g.id=?",
+            (g["id"],),
+        ).fetchone()
     except Exception:
         c.rollback(); raise
     finally:
@@ -816,11 +971,18 @@ def finish_gift_redeem(gid: int, success: bool):
             )
 
 def recover_incomplete_gift_redemptions() -> int:
-    """Finalize crash-interrupted gift claims for the already reserved recipient."""
+    """Recover gift claims without stealing ownership or inventing delivery.
+
+    If a credential is already durable, finalizing the claim is safe because the
+    recipient can retrieve it from "My services" after restart.  XUI claims that
+    crashed before credential persistence remain `redeeming` so the same recipient
+    can resume with the same code and deterministic remote client.
+    """
     with db() as c:
         cur = c.execute(
             "UPDATE gift_codes SET status='redeemed',redeemed_at=COALESCE(redeemed_at,?) "
-            "WHERE status='redeeming' AND recipient_user_id IS NOT NULL",
+            "WHERE status='redeeming' AND recipient_user_id IS NOT NULL "
+            "AND EXISTS(SELECT 1 FROM orders o WHERE o.id=gift_codes.order_id AND o.delivered_config IS NOT NULL AND o.delivered_config<>'')",
             (now(),)
         )
         return int(cur.rowcount or 0)
@@ -829,8 +991,9 @@ def recover_incomplete_gift_redemptions() -> int:
 def received_gifts(uid: int):
     with db() as c:
         return c.execute(
-            "SELECT g.*,o.plan_title,o.expires_at,o.delivered_config,o.id order_id "
+            "SELECT g.*,o.plan_title,o.expires_at,o.delivered_config,o.id order_id,xs.remote_status AS xui_remote_status "
             "FROM gift_codes g JOIN orders o ON o.id=g.order_id "
+            "LEFT JOIN xui_services xs ON xs.order_id=COALESCE(o.service_root_order_id,o.id) "
             "WHERE g.recipient_user_id=? AND g.status='redeemed' ORDER BY g.redeemed_at DESC",
             (uid,)
         ).fetchall()
@@ -838,8 +1001,9 @@ def received_gifts(uid: int):
 def received_gift(gid: int, uid: int):
     with db() as c:
         return c.execute(
-            "SELECT g.*,o.plan_title,o.expires_at,o.delivered_config,o.id order_id "
+            "SELECT g.*,o.plan_title,o.expires_at,o.delivered_config,o.id order_id,xs.remote_status AS xui_remote_status "
             "FROM gift_codes g JOIN orders o ON o.id=g.order_id "
+            "LEFT JOIN xui_services xs ON xs.order_id=COALESCE(o.service_root_order_id,o.id) "
             "WHERE g.id=? AND g.recipient_user_id=? AND g.status='redeemed'",
             (gid,uid)
         ).fetchone()
@@ -864,13 +1028,14 @@ def segment_user_ids(segment: str) -> list[int]:
             ).fetchall()
         elif segment == "active":
             rows = c.execute(
-                "SELECT DISTINCT u.user_id FROM users u JOIN orders o ON o.user_id=u.user_id "
-                "WHERE u.is_blocked=0 AND o.status=? AND o.expires_at>?", (COMPLETED, n)
+                "SELECT DISTINCT u.user_id FROM users u JOIN orders o ON COALESCE(o.service_owner_user_id,o.user_id)=u.user_id "
+                "WHERE u.is_blocked=0 AND o.status=? AND o.id=COALESCE(o.service_root_order_id,o.id) AND o.expires_at>?", (COMPLETED, n)
             ).fetchall()
         elif segment == "expiring3":
             rows = c.execute(
-                "SELECT DISTINCT u.user_id FROM users u JOIN orders o ON o.user_id=u.user_id "
-                "WHERE u.is_blocked=0 AND o.status=? AND o.expires_at>? AND o.expires_at<=?",
+                "SELECT DISTINCT u.user_id FROM users u JOIN orders o ON COALESCE(o.service_owner_user_id,o.user_id)=u.user_id "
+                "WHERE u.is_blocked=0 AND o.status=? AND o.id=COALESCE(o.service_root_order_id,o.id) "
+                "AND o.expires_at>? AND o.expires_at<=?",
                 (COMPLETED, n, soon)
             ).fetchall()
         elif segment == "vip":
@@ -934,7 +1099,8 @@ def notification_counts() -> dict[str, int]:
             "tickets": int(c.execute("SELECT COUNT(*) FROM tickets WHERE status='open'").fetchone()[0]),
             "flagged": int(c.execute("SELECT COUNT(*) FROM users WHERE test_review_required=1").fetchone()[0]),
             "expiring": int(c.execute(
-                "SELECT COUNT(*) FROM orders WHERE status=? AND expires_at>? AND expires_at<=?", (COMPLETED, n, soon)
+                "SELECT COUNT(*) FROM orders WHERE status=? AND id=COALESCE(service_root_order_id,id) "
+                "AND expires_at>? AND expires_at<=?", (COMPLETED, n, soon)
             ).fetchone()[0]),
             "low_plans": int(c.execute(
                 "SELECT COUNT(*) FROM plans p WHERE p.is_active=1 AND COALESCE(p.provision_mode,'inventory')<>'xui' AND (SELECT COUNT(*) FROM inventory i WHERE i.plan_id=p.id AND i.status='available')<=?",
@@ -977,7 +1143,10 @@ def dashboard_metrics() -> dict[str, Any]:
             "SELECT COUNT(*) FROM (SELECT user_id FROM orders WHERE status=? GROUP BY user_id HAVING COUNT(*)>=2)", (COMPLETED,)
         ).fetchone()[0])
         buyers = int(c.execute("SELECT COUNT(DISTINCT user_id) FROM orders WHERE status=?", (COMPLETED,)).fetchone()[0])
-        active = int(c.execute("SELECT COUNT(*) FROM orders WHERE status=? AND expires_at>?", (COMPLETED, now_s)).fetchone()[0])
+        active = int(c.execute(
+            "SELECT COUNT(*) FROM orders WHERE status=? AND id=COALESCE(service_root_order_id,id) AND expires_at>?",
+            (COMPLETED, now_s),
+        ).fetchone()[0])
         renewals = int(c.execute("SELECT COUNT(*) FROM orders WHERE status=? AND renew_parent_order_id IS NOT NULL", (COMPLETED,)).fetchone()[0])
         wallet_total = int(c.execute("SELECT COALESCE(SUM(wallet_balance),0) FROM users").fetchone()[0])
         top = c.execute(
@@ -1062,16 +1231,16 @@ def plan_is_xui(plan) -> bool:
     return bool(plan and str(plan["provision_mode"] or "inventory").lower() == "xui")
 
 def xui_service_for_order(oid: int):
+    root_id = service_root_id(int(oid))
     with db() as c:
-        return c.execute("SELECT * FROM xui_services WHERE order_id=?", (oid,)).fetchone()
+        return c.execute("SELECT * FROM xui_services WHERE order_id=?", (root_id,)).fetchone()
 
 def xui_parent_service(oid: int):
-    with db() as c:
-        return c.execute(
-            "SELECT xs.* FROM orders o JOIN xui_services xs ON xs.order_id=o.renew_parent_order_id "
-            "WHERE o.id=? AND o.renew_parent_order_id IS NOT NULL",
-            (oid,)
-        ).fetchone()
+    """Backward-compatible alias for the canonical XUI service of a renewal."""
+    o = get_order(int(oid))
+    if not o or not o["renew_parent_order_id"]:
+        return None
+    return xui_service_for_order(int(o["renew_parent_order_id"]))
 
 def upsert_xui_service(
     oid: int, uid: int, plan_id: Optional[int], client_email: str, client_uuid: str,
@@ -1097,10 +1266,11 @@ def upsert_xui_service(
         )
 
 def update_xui_service_sync(oid: int, *, total_bytes: int, expiry_ms: int, ip_limit: int, used_bytes: int, enabled: bool, last_error: str = ""):
+    root_id = service_root_id(int(oid))
     with db() as c:
         c.execute(
             "UPDATE xui_services SET total_bytes=?,expiry_ms=?,ip_limit=?,last_used_bytes=?,remote_status=?,last_sync_at=?,last_error=?,updated_at=? WHERE order_id=?",
-            (int(total_bytes),int(expiry_ms),int(ip_limit),int(used_bytes),"active" if enabled else "disabled",now(),last_error[:500],now(),oid)
+            (int(total_bytes),int(expiry_ms),int(ip_limit),int(used_bytes),"active" if enabled else "disabled",now(),last_error[:500],now(),root_id)
         )
 
 def xui_services_for_user(uid: int):
@@ -1215,16 +1385,13 @@ def recover_stale_reservations():
 
         for r in rows:
             if r["order_id"] and r["delivered_config"]:
+                # A staged credential is permanently bound to this order. Consume
+                # the inventory item, but keep an APPROVED order pending until a
+                # Telegram delivery retry succeeds and activates service validity.
                 c.execute(
                     "UPDATE inventory SET status='used',used_at=? WHERE id=?",
                     (now(), r["id"])
                 )
-                if r["status"] == APPROVED:
-                    c.execute(
-                        "UPDATE orders SET status=?,completed_at=COALESCE(completed_at,?),updated_at=? "
-                        "WHERE id=? AND status=?",
-                        (COMPLETED, now(), now(), r["order_id"], APPROVED)
-                    )
             elif r["order_id"] and r["status"] == COMPLETED:
                 c.execute(
                     "UPDATE inventory SET status='used',used_at=? WHERE id=?",
@@ -1585,36 +1752,285 @@ def buyer_orders(uid: int, page: int, per_page: int = 10):
             (uid, COMPLETED, per_page + 1, off)
         ).fetchall()
 
+def service_root_id(oid: int) -> int:
+    """Return the canonical root order for a service/renewal chain."""
+    current = int(oid)
+    seen: set[int] = set()
+    with db() as c:
+        for _ in range(64):
+            if current in seen:
+                break
+            seen.add(current)
+            row = c.execute(
+                "SELECT id,service_root_order_id,renew_parent_order_id FROM orders WHERE id=?",
+                (current,),
+            ).fetchone()
+            if not row:
+                return int(oid)
+            if row["service_root_order_id"]:
+                return int(row["service_root_order_id"])
+            if not row["renew_parent_order_id"]:
+                return int(row["id"])
+            current = int(row["renew_parent_order_id"])
+    return int(oid)
+
+
+def service_root_order(oid: int):
+    return get_order(service_root_id(oid))
+
+
+def order_provision_mode(o) -> str:
+    if not o:
+        return "inventory"
+    try:
+        value = o["provision_mode_snapshot"]
+    except (KeyError, IndexError):
+        value = None
+    if value:
+        return str(value).strip().lower()
+    if o["plan_id"]:
+        plan = get_plan(int(o["plan_id"]))
+        if plan:
+            return str(plan["provision_mode"] or "inventory").strip().lower()
+    return "inventory"
+
+
+def order_is_xui(o) -> bool:
+    return order_provision_mode(o) == "xui"
+
+
+def order_xui_inbound_ids(o) -> list[int]:
+    if not o:
+        return []
+    try:
+        value = o["xui_inbound_ids_snapshot"]
+    except (KeyError, IndexError):
+        value = ""
+    return parse_inbound_ids(str(value or ""))
+
+
+def order_xui_traffic_gb(o) -> int:
+    try:
+        return max(0, int(o["xui_traffic_gb_snapshot"] or 0))
+    except (TypeError, ValueError, KeyError, IndexError):
+        return 0
+
+
+def order_xui_ip_limit(o) -> int:
+    try:
+        return max(0, int(o["xui_ip_limit_snapshot"] or 0))
+    except (TypeError, ValueError, KeyError, IndexError):
+        return 0
+
+
+def mark_order_paid(oid: int, *, approved_at: Optional[datetime] = None, source: str = "server-tehran") -> bool:
+    """Persist the successful payment timestamp without starting service validity."""
+    dt = approved_at or iran_now()
+    n = db_dt(dt)
+    with db() as c:
+        cur = c.execute(
+            "UPDATE orders SET purchased_at=COALESCE(purchased_at,?),time_source=COALESCE(time_source,?),updated_at=? WHERE id=?",
+            (n, source, now(), int(oid)),
+        )
+        return cur.rowcount == 1
+
+
+def _activation_window_in_tx(c: sqlite3.Connection, o, *, owner_uid: Optional[int], activation_dt: Optional[datetime]):
+    """Prepare a deterministic service window inside an existing transaction."""
+    activation = parse_db_dt(o["service_activated_at"]) if o["service_activated_at"] else None
+    expiry = parse_db_dt(o["expires_at"]) if o["expires_at"] else None
+    if activation and expiry:
+        return activation, expiry
+
+    activation = (activation_dt or iran_now()).replace(microsecond=0)
+    duration = max(1, int(o["duration_days"] or 30))
+    root_id = int(o["service_root_order_id"] or o["id"])
+    base = activation
+    if int(o["renew_parent_order_id"] or 0) and root_id != int(o["id"]):
+        root = c.execute("SELECT expires_at FROM orders WHERE id=?", (root_id,)).fetchone()
+        root_exp = parse_db_dt(root["expires_at"]) if root and root["expires_at"] else None
+        if root_exp and root_exp > base:
+            base = root_exp
+    expiry = base + timedelta(days=duration)
+
+    if owner_uid is None:
+        if o["service_owner_user_id"]:
+            owner_uid = int(o["service_owner_user_id"])
+        elif not int(o["is_gift"] or 0):
+            owner_uid = int(o["user_id"])
+
+    purchased = o["purchased_at"] or o["approved_at"] or db_dt(activation)
+    c.execute(
+        "UPDATE orders SET purchased_at=COALESCE(purchased_at,?),service_activated_at=?,expires_at=?,"
+        "service_owner_user_id=COALESCE(?,service_owner_user_id),time_source=COALESCE(time_source,'server-tehran'),updated_at=? WHERE id=?",
+        (purchased, db_dt(activation), db_dt(expiry), owner_uid, now(), int(o["id"])),
+    )
+    return activation, expiry
+
+
+def prepare_service_activation(oid: int, *, owner_uid: Optional[int] = None, activation_dt: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    """Persist a deterministic activation/expiry target before remote provisioning.
+
+    This does not extend the canonical root service yet.  The root is updated only
+    after delivery succeeds, so a failed renewal cannot grant unpaid/unfulfilled time.
+    """
+    c = db()
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        o = c.execute("SELECT * FROM orders WHERE id=?", (int(oid),)).fetchone()
+        if not o:
+            raise ValueError("order not found")
+        if o["status"] not in (APPROVED, COMPLETED):
+            raise ValueError("order is not approved for activation")
+        result = _activation_window_in_tx(c, o, owner_uid=owner_uid, activation_dt=activation_dt)
+        c.commit()
+        return result
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+
+
+def stage_delivery_config(oid: int, config: str) -> str:
+    """Durably bind one credential to an order *before* sending it to Telegram.
+
+    This closes the crash window where an inventory credential could be sent and
+    then accidentally returned to stock before the database recorded delivery.
+    Once staged, a different credential is never substituted for the same order.
+    """
+    value = str(config or "").strip()
+    if not value:
+        raise ValueError("empty delivery credential")
+    c = db()
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute("SELECT delivered_config,status FROM orders WHERE id=?", (int(oid),)).fetchone()
+        if not row:
+            raise ValueError("order not found")
+        if row["status"] not in (APPROVED, COMPLETED):
+            raise ValueError("order is not approved for delivery")
+        existing = str(row["delivered_config"] or "").strip()
+        if existing:
+            c.commit()
+            return existing
+        c.execute("UPDATE orders SET delivered_config=?,updated_at=? WHERE id=?", (value, now(), int(oid)))
+        c.commit()
+        return value
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+
+
+def finalize_service_delivery(oid: int, config: str, *, owner_uid: Optional[int] = None) -> bool:
+    """Atomically persist a delivered service and promote renewal expiry to its root."""
+    c = db()
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        o = c.execute("SELECT * FROM orders WHERE id=?", (int(oid),)).fetchone()
+        if not o:
+            c.rollback()
+            return False
+        if o["status"] not in (APPROVED, COMPLETED):
+            c.rollback()
+            return False
+        activation, expiry = _activation_window_in_tx(c, o, owner_uid=owner_uid, activation_dt=None)
+        root_id = int(o["service_root_order_id"] or o["id"])
+        effective_owner = owner_uid
+        if effective_owner is None:
+            effective_owner = int(o["service_owner_user_id"] or o["user_id"])
+        n = now()
+        c.execute(
+            "UPDATE orders SET delivered_config=?,status=?,completed_at=COALESCE(completed_at,?),updated_at=?,"
+            "service_owner_user_id=COALESCE(?,service_owner_user_id),delivery_attempts=0 WHERE id=?",
+            (str(config), COMPLETED, n, n, effective_owner, int(oid)),
+        )
+        # The root is the one visible active service. Renewal rows stay as financial
+        # history while the root carries the authoritative current expiry.
+        c.execute(
+            "UPDATE orders SET expires_at=?,service_owner_user_id=COALESCE(?,service_owner_user_id),"
+            "expiry_warned_at=NULL,expired_notified_at=NULL,updated_at=? WHERE id=?",
+            (db_dt(expiry), effective_owner, n, root_id),
+        )
+        c.execute(
+            "UPDATE xui_services SET user_id=?,expiry_ms=CASE WHEN expiry_ms>0 THEN ? ELSE expiry_ms END,updated_at=? WHERE order_id=?",
+            (effective_owner, int(expiry.timestamp() * 1000), n, root_id),
+        )
+        c.commit()
+        return True
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+
+
 def create_order(
     uid: int,
     plan,
-    purchase_dt: datetime,
-    time_source: str,
+    purchase_dt: Optional[datetime] = None,
+    time_source: str = "server-tehran",
     renew_parent_order_id: Optional[int] = None,
     is_gift: bool = False,
 ) -> int:
+    """Create an order with a frozen commercial + technical plan snapshot.
+
+    Service validity intentionally starts later, on actual provisioning/delivery.
+    `purchase_dt` is accepted for backward call compatibility but is not used as a
+    service start timestamp.
+    """
     duration = max(1, int(plan["duration_days"] or 30))
-    expiry_base = purchase_dt
-    if renew_parent_order_id:
-        parent = get_order(renew_parent_order_id)
-        parent_exp = parse_db_dt(parent["expires_at"]) if parent else None
-        if parent_exp and parent_exp > expiry_base:
-            expiry_base = parent_exp
-    expires_dt = expiry_base + timedelta(days=duration)
     n = now()
-    with db() as c:
+    mode = str(plan["provision_mode"] or "inventory").strip().lower()
+    inbounds = str(plan["xui_inbound_ids"] or "")
+    traffic = max(0, int(plan["xui_traffic_gb"] or 0))
+    ip_limit = max(0, int(plan["xui_ip_limit"] or 0))
+    root_id: Optional[int] = None
+    owner_uid: Optional[int] = None if is_gift else int(uid)
+    if renew_parent_order_id:
+        if mode == "xui":
+            root_id = service_root_id(int(renew_parent_order_id))
+            root = get_order(root_id)
+            if root and root["service_owner_user_id"]:
+                owner_uid = int(root["service_owner_user_id"])
+            else:
+                owner_uid = int(uid)
+        else:
+            # Inventory renewals deliver a new credential. Keep the parent link for
+            # purchase history, but model the delivered credential as a new service.
+            root_id = None
+            owner_uid = int(uid)
+
+    c = db()
+    try:
+        c.execute("BEGIN IMMEDIATE")
         cur = c.execute("""
             INSERT INTO orders(
                 user_id,plan_id,plan_title,base_amount,discount_amount,final_amount,
-                status,created_at,updated_at,duration_days,purchased_at,expires_at,
-                time_source,renew_parent_order_id,is_gift
-            ) VALUES(?,?,?,?,0,?,?,?,?,?,?,?,?,?,?)
+                status,created_at,updated_at,duration_days,purchased_at,service_activated_at,expires_at,
+                time_source,renew_parent_order_id,service_root_order_id,service_owner_user_id,
+                provision_mode_snapshot,xui_inbound_ids_snapshot,xui_traffic_gb_snapshot,xui_ip_limit_snapshot,
+                is_gift
+            ) VALUES(?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             uid, plan["id"], plan["title"], plan["price"], plan["price"],
-            AWAIT_RECEIPT, n, n, duration, db_dt(purchase_dt), db_dt(expires_dt),
-            time_source, renew_parent_order_id, 1 if is_gift else 0
+            AWAIT_RECEIPT, n, n, duration, None, None, None,
+            None, renew_parent_order_id, root_id, owner_uid,
+            mode, inbounds, traffic, ip_limit, 1 if is_gift else 0
         ))
-        return int(cur.lastrowid)
+        oid = int(cur.lastrowid)
+        if root_id is None:
+            root_id = oid
+            c.execute("UPDATE orders SET service_root_order_id=? WHERE id=?", (oid, oid))
+        c.commit()
+        return oid
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
 
 def pending_renewal(uid: int, parent_oid: int):
     with db() as c:
@@ -1634,17 +2050,22 @@ def get_order(oid: int):
 
 def update_status(oid: int, status: str, reason: Optional[str] = None,
                   approved: bool = False, completed: bool = False):
+    n = now()
     fields = ["status=?", "updated_at=?"]
-    vals: list[Any] = [status, now()]
+    vals: list[Any] = [status, n]
     if reason is not None:
         fields.append("rejection_reason=?")
         vals.append(reason)
     if approved:
-        fields.append("approved_at=?")
-        vals.append(now())
+        fields.extend([
+            "approved_at=?",
+            "purchased_at=COALESCE(purchased_at,?)",
+            "time_source=COALESCE(time_source,?)",
+        ])
+        vals.extend([n, n, "server-tehran"])
     if completed:
         fields.append("completed_at=?")
-        vals.append(now())
+        vals.append(n)
     vals.append(oid)
     with db() as c:
         c.execute(f"UPDATE orders SET {','.join(fields)} WHERE id=?", vals)
@@ -1665,7 +2086,9 @@ def account_stats(uid: int) -> dict[str, Any]:
             (uid, COMPLETED)
         ).fetchone()[0]
         delivered = c.execute(
-            "SELECT COUNT(*) FROM orders WHERE user_id=? AND status=? AND expires_at IS NOT NULL AND expires_at>?",
+            "SELECT COUNT(*) FROM orders o WHERE COALESCE(o.service_owner_user_id,o.user_id)=? AND o.status=? "
+            "AND o.id=COALESCE(o.service_root_order_id,o.id) AND o.expires_at IS NOT NULL AND o.expires_at>? "
+            "AND NOT EXISTS(SELECT 1 FROM xui_services xs WHERE xs.order_id=o.id AND xs.remote_status<>'active')",
             (uid, COMPLETED, now())
         ).fetchone()[0]
         pending = c.execute(
@@ -1689,10 +2112,14 @@ def account_stats(uid: int) -> dict[str, Any]:
     }
 
 def delivered_services(uid: int):
+    """Return one row per directly-owned service (renewal transactions are hidden)."""
     with db() as c:
         return c.execute(
-            "SELECT * FROM orders WHERE user_id=? AND status=? "
-            "ORDER BY COALESCE(expires_at,completed_at) DESC, id DESC LIMIT 20",
+            "SELECT o.*,xs.remote_status AS xui_remote_status FROM orders o "
+            "LEFT JOIN xui_services xs ON xs.order_id=o.id "
+            "WHERE COALESCE(o.service_owner_user_id,o.user_id)=? AND o.status=? "
+            "AND o.id=COALESCE(o.service_root_order_id,o.id) AND COALESCE(o.is_gift,0)=0 "
+            "ORDER BY COALESCE(o.expires_at,o.completed_at) DESC, o.id DESC LIMIT 20",
             (uid, COMPLETED)
         ).fetchall()
 
@@ -1706,6 +2133,14 @@ def service_remaining_days(o) -> int:
     return max(1, int((seconds + 86399) // 86400))
 
 def service_state(o) -> str:
+    try:
+        remote = o["xui_remote_status"] if "xui_remote_status" in o.keys() else None
+    except Exception:
+        remote = None
+    if remote == "deleted":
+        return "حذف‌شده ⛔"
+    if remote == "disabled":
+        return "غیرفعال ⛔"
     exp = parse_db_dt(o["expires_at"])
     if not exp:
         return "تحویل‌شده"

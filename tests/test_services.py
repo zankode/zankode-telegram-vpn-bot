@@ -95,6 +95,7 @@ class ServiceReliabilityTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_long_config_uses_single_document_delivery(self):
         oid = storage.create_order(501, self.plan, storage.iran_now(), "test")
+        storage.update_status(oid, storage.APPROVED, approved=True)
         bot = _FakeBot()
         config = "x" * 5000
         ok = await services.send_config(
@@ -111,6 +112,7 @@ class ServiceReliabilityTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_config_delivery_does_not_mark_order_delivered(self):
         oid = storage.create_order(501, self.plan, storage.iran_now(), "test")
+        storage.update_status(oid, storage.APPROVED, approved=True)
         with self.assertLogs("zankode-vpn", level="ERROR"):
             ok = await services.send_config(
                 SimpleNamespace(bot=_FakeBot(fail_first=True)),
@@ -124,7 +126,39 @@ class ServiceReliabilityTest(unittest.IsolatedAsyncioTestCase):
             row = conn.execute(
                 "SELECT delivered_config FROM orders WHERE id=?", (oid,)
             ).fetchone()
-        self.assertIsNone(row["delivered_config"])
+        self.assertEqual(row["delivered_config"], "vless://example")
+        self.assertEqual(storage.get_order(oid)["status"], storage.APPROVED)
+
+    async def test_failed_inventory_delivery_keeps_same_credential_reserved_for_retry(self):
+        pid = int(self.plan["id"])
+        storage.add_stock(pid, ["vless://reserved-one"])
+        oid = storage.create_order(501, self.plan)
+        storage.update_status(oid, storage.APPROVED, approved=True)
+
+        first = await services.fulfill_approved_order(
+            SimpleNamespace(bot=_FakeBot(fail_first=True)), oid, actor="test"
+        )
+        self.assertFalse(first)
+        order = storage.get_order(oid)
+        self.assertEqual(order["status"], storage.APPROVED)
+        self.assertEqual(order["delivered_config"], "vless://reserved-one")
+        self.assertEqual(int(order["delivery_attempts"]), 1)
+        with storage.db() as conn:
+            inv = conn.execute("SELECT status,order_id FROM inventory WHERE plan_id=?", (pid,)).fetchone()
+        self.assertEqual(inv["status"], "reserved")
+        self.assertEqual(int(inv["order_id"]), oid)
+
+        second_bot = _FakeBot()
+        second = await services.fulfill_approved_order(
+            SimpleNamespace(bot=second_bot), oid, actor="test"
+        )
+        self.assertTrue(second)
+        self.assertEqual(storage.get_order(oid)["status"], storage.COMPLETED)
+        self.assertEqual(storage.get_order(oid)["delivered_config"], "vless://reserved-one")
+        self.assertEqual(int(storage.get_order(oid)["delivery_attempts"]), 0)
+        with storage.db() as conn:
+            inv = conn.execute("SELECT status FROM inventory WHERE plan_id=?", (pid,)).fetchone()
+        self.assertEqual(inv["status"], "used")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Zankode VPN — 3X-UI Setup
 
-This guide configures the optional direct 3X-UI delivery mode in Zankode VPN v2.2.0.
+This guide configures the optional direct 3X-UI delivery mode in Zankode VPN v2.2.1.
 
 ## Recommended panel generation
 
@@ -47,20 +47,24 @@ Open **Admin → More tools → 3X-UI Center**. The bot performs a live API requ
 
 After an order is approved, an XUI-mode plan follows this sequence:
 
-1. Zankode creates a unique client email for the order.
+1. Zankode derives a deterministic client identity for the canonical service.
 2. The Clients API attaches the client to the configured inbound IDs.
 3. 3X-UI generates protocol-specific credentials for modern panels.
 4. Zankode immediately reads the client back and stores a local mapping.
 5. A configured subscription URL is delivered; otherwise Zankode requests the panel-generated client links.
-6. Only after Telegram delivery succeeds is the order marked completed.
+6. Service validity is activated at delivery time; only after Telegram delivery succeeds is the normal order marked completed.
 
-The local mapping is written before Telegram delivery. If Telegram fails after the remote client was created, a retry reuses the existing client instead of creating a duplicate.
+The local mapping is written before Telegram delivery. If Telegram fails after the remote client was created, a retry reuses the existing client instead of creating a duplicate. If the process crashes after the remote action but before the local marker, Zankode reconciles the deterministic remote state before applying another mutation.
 
 ## 5. Renewal
 
-A renewal order linked to an existing XUI service updates that same client. Zankode extends expiry, applies the renewal plan's quota/IP limit, requests a traffic reset, and re-delivers the existing service credential.
+A renewal order linked to an existing XUI service updates that same client to a deterministic target expiry, applies the renewal plan's quota/IP limit, requests a traffic reset when the renewal is first applied, and re-delivers the existing service credential. Renewal transactions stay linked to one canonical active service.
 
-## 6. Status and deletion
+## 6. Gifts
+
+For an XUI-mode gift, purchasing the gift creates the voucher only. The remote client and its expiry are created when the recipient redeems the Gift Code, so the recipient receives the full purchased duration and becomes the operational service owner.
+
+## 7. Status and deletion
 
 Users can refresh the live status of their own XUI service. Admin order views expose sync and remote-delete controls. Deleting a remote client is a destructive action and requires the explicit admin confirmation button.
 

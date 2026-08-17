@@ -110,7 +110,7 @@ async def post_init(app: Application):
 
     # Maintenance must start even if an optional Telegram startup call fails.
     if "operations_task" not in app.bot_data:
-        app.bot_data["operations_task"] = asyncio.create_task(operations_watch_loop(app))
+        app.bot_data["operations_task"] = asyncio.create_task(operations_watch_loop(app), name="operations-watch")
 
     try:
         # Only /start is visible in Telegram's command menu.
@@ -122,6 +122,26 @@ async def post_init(app: Application):
         log.info("Bot started @%s id=%s | Premium Everything Mode=ON", me.username, me.id)
     except TelegramError:
         log.warning("post_init telegram call failed; maintenance loop is still active")
+
+async def _stop_operations_task(app: Application):
+    task = app.bot_data.get("operations_task")
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+async def post_stop(app: Application):
+    # Stop our raw maintenance task before the Bot request layer is shut down.
+    await _stop_operations_task(app)
+
+
+async def post_shutdown(app: Application):
+    # Idempotent safety net for unusual shutdown paths.
+    await _stop_operations_task(app)
+
 
 def main():
     """Initialize the database, register Telegram handlers, and start polling."""
@@ -140,7 +160,14 @@ def main():
         log.warning("Recovered %s crash-interrupted gift redemption(s)", recovered_gifts)
     database_integrity_check()
 
-    app = Application.builder().token(BOT_TOKEN.strip()).post_init(post_init).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN.strip())
+        .post_init(post_init)
+        .post_stop(post_stop)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("account", cmd_account))

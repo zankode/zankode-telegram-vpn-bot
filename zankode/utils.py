@@ -3,9 +3,6 @@
 
 from .config import *
 
-_TIME_IR_CACHE_DT = None
-_TIME_IR_CACHE_MONO = 0.0
-
 def iran_now() -> datetime:
     return datetime.now(IRAN_TZ)
 
@@ -94,38 +91,12 @@ def jalali_month_bounds(value: datetime) -> tuple[datetime, datetime, str]:
     return start, end, f"{jy:04d}-{jm:02d}"
 
 async def time_ir_now() -> tuple[datetime, str]:
-    """Reference purchase time from time.ir; cached + safe Tehran fallback."""
-    global _TIME_IR_CACHE_DT, _TIME_IR_CACHE_MONO
+    """Return Tehran wall-clock time without an external HTTP dependency.
 
-    mono = time.monotonic()
-    if _TIME_IR_CACHE_DT is not None and mono - _TIME_IR_CACHE_MONO < TIME_IR_CACHE_SECONDS:
-        elapsed = max(0.0, mono - _TIME_IR_CACHE_MONO)
-        return _TIME_IR_CACHE_DT + timedelta(seconds=elapsed), "time.ir-cache"
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=8.0,
-            follow_redirects=True,
-            headers={"User-Agent": "ZankodeVPNBot/1.0"},
-        ) as client:
-            response = await client.get(TIME_IR_URL)
-            response.raise_for_status()
-            header = response.headers.get("date")
-            if not header:
-                raise ValueError("time.ir Date header missing")
-            dt = parsedate_to_datetime(header)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            dt = dt.astimezone(IRAN_TZ)
-            if abs((dt - iran_now()).total_seconds()) > 48 * 3600:
-                raise ValueError("time.ir Date header looks stale")
-
-            _TIME_IR_CACHE_DT = dt
-            _TIME_IR_CACHE_MONO = time.monotonic()
-            return dt, "time.ir"
-    except Exception as exc:
-        log.warning("time.ir unavailable; Tehran fallback used: %s", exc)
-        return iran_now(), "tehran-fallback"
+    Production hosts should keep their system clock synchronized (NTP/systemd-timesyncd).
+    The async signature is retained for backward compatibility with existing handlers.
+    """
+    return iran_now(), "server-tehran"
 
 def ts() -> int:
     return int(time.time())

@@ -560,7 +560,7 @@ async def admin_callback(q, context, data: str):
                 q,
                 "🔌 <b>مرکز 3X-UI</b>\n\n"
                 "⛔ اتصال هنوز کامل تنظیم نشده.\n"
-                "در <code>.env</code> حداقل XUI_PANEL_URL، XUI_API_TOKEN و XUI_SUB_URL_TEMPLATE را قرار بده.\n\n"
+                "در <code>.env</code> حداقل XUI_PANEL_URL و XUI_API_TOKEN را قرار بده. XUI_SUB_URL_TEMPLATE اختیاری است.\n\n"
                 f"📦 سرویس‌های ثبت‌شده محلی: <b>{metrics['total']}</b>",
                 InlineKeyboardMarkup([[InlineKeyboardButton("🔙 ابزارها", callback_data="a:more")]])
             )
@@ -1113,10 +1113,12 @@ async def admin_callback(q, context, data: str):
 
 def atomic_approve_order(oid: int) -> bool:
     with db() as c:
+        paid_at = now()
         cur = c.execute(
-            "UPDATE orders SET status=?,updated_at=?,approved_at=? "
+            "UPDATE orders SET status=?,updated_at=?,approved_at=?,purchased_at=COALESCE(purchased_at,?),"
+            "time_source=COALESCE(time_source,'server-tehran') "
             "WHERE id=? AND status=? AND receipt_file_id IS NOT NULL",
-            (APPROVED, now(), now(), oid, AWAIT_ADMIN)
+            (APPROVED, paid_at, paid_at, paid_at, oid, AWAIT_ADMIN)
         )
         return cur.rowcount == 1
 

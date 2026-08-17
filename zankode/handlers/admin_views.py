@@ -200,39 +200,46 @@ async def copy_message_with_retry(
             await asyncio.sleep(0.75 + attempt)
     return False
 
+def _broadcast_lock(context) -> asyncio.Lock:
+    lock = context.application.bot_data.get("broadcast_lock")
+    if lock is None:
+        lock = asyncio.Lock()
+        context.application.bot_data["broadcast_lock"] = lock
+    return lock
+
 async def broadcast_to_ids(update, context, ids: list[int], label: str):
-    m = update.effective_message
-    ids = list(dict.fromkeys(int(x) for x in ids))
-    status = await m.reply_text(f"🎯 ارسال به {len(ids)} کاربر ({label}) شروع شد...")
-    ok = fail = 0
+    async with _broadcast_lock(context):
+        m = update.effective_message
+        ids = list(dict.fromkeys(int(x) for x in ids))
+        status = await m.reply_text(f"🎯 ارسال به {len(ids)} کاربر ({label}) شروع شد...")
+        ok = fail = 0
 
-    for i, uid in enumerate(ids, 1):
-        sent = await copy_message_with_retry(
-            context.bot,
-            chat_id=uid,
-            from_chat_id=m.chat_id,
-            message_id=m.message_id,
-        )
-        if sent:
-            ok += 1
-        else:
-            fail += 1
+        for i, uid in enumerate(ids, 1):
+            sent = await copy_message_with_retry(
+                context.bot,
+                chat_id=uid,
+                from_chat_id=m.chat_id,
+                message_id=m.message_id,
+            )
+            if sent:
+                ok += 1
+            else:
+                fail += 1
 
-        await asyncio.sleep(0.08)
+            await asyncio.sleep(0.08)
 
-        if i % 50 == 0:
-            try:
-                await status.edit_text(f"🎯 {i}/{len(ids)} • ✅ {ok} • ❌ {fail}")
-            except TelegramError:
-                pass
+            if i % 50 == 0:
+                try:
+                    await status.edit_text(f"🎯 {i}/{len(ids)} • ✅ {ok} • ❌ {fail}")
+                except TelegramError:
+                    pass
 
-    try:
-        await status.edit_text(f"✅ پایان ارسال {label}\nموفق: {ok}\nناموفق: {fail}")
-    except TelegramError:
-        pass
+        try:
+            await status.edit_text(f"✅ پایان ارسال {label}\nموفق: {ok}\nناموفق: {fail}")
+        except TelegramError:
+            pass
 
-    audit(ADMIN_USER_ID, "target_broadcast", f"{label}:{ok}/{fail}")
-
+        audit(ADMIN_USER_ID, "target_broadcast", f"{label}:{ok}/{fail}")
 async def render_orders(q, status: Optional[str], page: int, title: str):
     rows_data = list_orders(status, page)
     has_next = len(rows_data) > PAGE_SIZE
